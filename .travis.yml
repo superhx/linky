@@ -1,0 +1,17 @@
+dist: trusty
+
+language: java
+
+install:
+  - export M2_HOME=$PWD/apache-maven-3.5.0
+  - if [ ! -d $M2_HOME/bin ]; then curl https://archive.apache.org/dist/maven/maven-3/3.5.0/binaries/apache-maven-3.5.0-bin.tar.gz | tar zxf - -C $HOME; fi
+  - export PATH=$M2_HOME/bin:$PATH
+  - mvn -version
+  - mvn clean package install -DskipTests -Dgpg.skip
+
+jdk:
+- oraclejdk8
+- openjdk8
+
+
+script: mvn clean install
