@@ -32,6 +32,7 @@ message PutResponse {
 message GetRequest {
     string topic = 1;
     int32 partition = 2;
+    int64 offset = 3;
 }
 
 message GetResponse {

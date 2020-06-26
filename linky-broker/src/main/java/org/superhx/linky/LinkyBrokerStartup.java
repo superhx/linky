@@ -18,6 +18,8 @@ package org.superhx.linky;
 
 import java.io.IOException;
 
+import org.superhx.linky.broker.persistence.LocalPersistenceFactoryImpl;
+import org.superhx.linky.broker.persistence.Partition;
 import org.superhx.linky.service.proto.*;
 
 import io.grpc.Server;
@@ -25,26 +27,43 @@ import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 
 public class LinkyBrokerStartup {
-    public static void main(String... args) throws IOException, InterruptedException {
+    Partition partition;
+    Server    server;
+
+    public LinkyBrokerStartup() {
+        partition = new LocalPersistenceFactoryImpl().newPartition();
         System.out.println("first linky event");
-        Server server = ServerBuilder.forPort(9594).addService(new RecordService()).build();
+        server = ServerBuilder.forPort(9594).addService(new RecordService()).build();
+    }
+
+    public void start() throws IOException, InterruptedException {
         server.start();
         server.awaitTermination();
     }
 
-    static class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
+    public static void main(String... args) throws IOException, InterruptedException {
+        new LinkyBrokerStartup().start();
+    }
+
+    class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
 
         @Override
         public void put(PutRequest request, StreamObserver<PutResponse> responseObserver) {
-            System.out.println(String.format("receive %s", request));
-            PutResponse response = PutResponse.newBuilder().setStatus(PutResponse.Status.SUCCESS).setOffset(1).build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
+            partition.append(request.getBatchRecord()).thenAccept(appendResult -> {
+                PutResponse response = PutResponse.newBuilder().setStatus(PutResponse.Status.SUCCESS)
+                    .setOffset(appendResult.getOffset()).build();
+                responseObserver.onNext(response);
+                responseObserver.onCompleted();
+            });
         }
 
         @Override
         public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
-            super.get(request, responseObserver);
+            partition.get(request.getOffset()).thenAccept(getResult -> {
+                GetResponse response = GetResponse.newBuilder().setBatchRecord(getResult).build();
+                responseObserver.onNext(response);
+                responseObserver.onCompleted();
+            });
         }
     }
 }
