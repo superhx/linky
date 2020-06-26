@@ -16,8 +16,35 @@
  */
 package org.superhx.linky;
 
+import java.io.IOException;
+
+import org.superhx.linky.service.proto.*;
+
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
+import io.grpc.stub.StreamObserver;
+
 public class LinkyBrokerStartup {
-    public static void main(String... args) {
+    public static void main(String... args) throws IOException, InterruptedException {
         System.out.println("first linky event");
+        Server server = ServerBuilder.forPort(9594).addService(new RecordService()).build();
+        server.start();
+        server.awaitTermination();
+    }
+
+    static class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
+
+        @Override
+        public void put(PutRequest request, StreamObserver<PutResponse> responseObserver) {
+            System.out.println(String.format("receive %s", request));
+            PutResponse response = PutResponse.newBuilder().setStatus(PutResponse.Status.SUCCESS).setOffset(1).build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
+            super.get(request, responseObserver);
+        }
     }
 }
