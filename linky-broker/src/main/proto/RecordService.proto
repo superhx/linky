@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package linky;
+
+import 'BatchRecord.proto';
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = true;
+option java_outer_classname = "RecordServiceProto";
+
+
+service RecordService {
+    rpc Put(PutRequest) returns (PutResponse) {}
+
+    rpc Get(GetRequest) returns (GetResponse) {}
+}
+
+message PutRequest {
+    string topic = 1;
+    BatchRecord batchRecord = 2;
+}
+
+message PutResponse {
+    enum Status {
+        SUCCESS = 0;
+        FAIL = 1;
+    }
+    Status status = 1;
+    int64 offset = 2;
+}
+
+message GetRequest {
+    string topic = 1;
+    int32 partition = 2;
+}
+
+message GetResponse {
+    enum Status {
+        SUCCESS = 0;
+        FAIL = 1;
+    }
+    Status status = 1;
+    BatchRecord batchRecord = 2;
+}
