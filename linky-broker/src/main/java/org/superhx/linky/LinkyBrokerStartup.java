@@ -16,54 +16,95 @@
  */
 package org.superhx.linky;
 
-import java.io.IOException;
-
-import org.superhx.linky.broker.persistence.LocalPersistenceFactoryImpl;
-import org.superhx.linky.broker.persistence.Partition;
-import org.superhx.linky.service.proto.*;
-
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
-import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.loadbalance.*;
+import org.superhx.linky.broker.persistence.LocalSegmentManager;
+import org.superhx.linky.broker.persistence.MemPersistenceFactory;
+import org.superhx.linky.broker.persistence.PersistenceFactory;
+import org.superhx.linky.broker.service.DataNodeCnx;
+import org.superhx.linky.broker.service.PartitionService;
+import org.superhx.linky.broker.service.RecordService;
+import org.superhx.linky.broker.service.SegmentService;
+import org.superhx.linky.service.proto.ControllerServiceProto;
+
+import java.io.IOException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class LinkyBrokerStartup {
-    Partition partition;
-    Server    server;
+  private static final Logger log = LoggerFactory.getLogger(LinkyBrokerStartup.class);
+  private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
+  Server server;
 
-    public LinkyBrokerStartup() {
-        partition = new LocalPersistenceFactoryImpl().newPartition();
-        System.out.println("first linky event");
-        server = ServerBuilder.forPort(9594).addService(new RecordService()).build();
-    }
+  public LinkyBrokerStartup() {
+    String address = System.getProperty("address", "127.0.0.1:9594");
+    BrokerContext brokerContext = new BrokerContext();
+    brokerContext.setAddress(address);
+    log.info("broker {} startup", address);
 
-    public void start() throws IOException, InterruptedException {
-        server.start();
-        server.awaitTermination();
-    }
+    RecordService recordService = new RecordService();
+    PartitionService partitionService = new PartitionService();
+    SegmentService segmentService = new SegmentService();
+    DataNodeCnx dataNodeCnx = new DataNodeCnx();
+    LocalSegmentManager localSegmentManager = new LocalSegmentManager();
+    PersistenceFactory persistenceFactory = new MemPersistenceFactory();
 
-    public static void main(String... args) throws IOException, InterruptedException {
-        new LinkyBrokerStartup().start();
-    }
+    recordService.setPartitionService(partitionService);
+    partitionService.setPersistenceFactory(persistenceFactory);
+    segmentService.setLocalSegmentManager(localSegmentManager);
+    localSegmentManager.setDataNodeCnx(dataNodeCnx);
+    localSegmentManager.setPersistenceFactory(persistenceFactory);
+    ((MemPersistenceFactory) persistenceFactory).setBrokerContext(brokerContext);
+    ((MemPersistenceFactory) persistenceFactory).setLocalSegmentManager(localSegmentManager);
+    dataNodeCnx.setBrokerContext(brokerContext);
 
-    class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
+    ControlNodeCnx controlNodeCnx = new ControlNodeCnx();
+    PartitionRegistry partitionRegistry = new PartitionRegistryImpl();
+    NodeRegistry nodeRegistry = new NodeRegistryImpl();
+    SegmentRegistryImpl segmentRegistry = new SegmentRegistryImpl();
+    ControllerService controllerService = new ControllerService();
 
-        @Override
-        public void put(PutRequest request, StreamObserver<PutResponse> responseObserver) {
-            partition.append(request.getBatchRecord()).thenAccept(appendResult -> {
-                PutResponse response = PutResponse.newBuilder().setStatus(PutResponse.Status.SUCCESS)
-                    .setOffset(appendResult.getOffset()).build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
-            });
-        }
+    ((PartitionRegistryImpl) partitionRegistry).setControlNodeCnx(controlNodeCnx);
+    ((PartitionRegistryImpl) partitionRegistry).setNodeRegistry(nodeRegistry);
+    ((PartitionRegistryImpl) partitionRegistry).setSegmentRegistry(segmentRegistry);
+    ((SegmentRegistryImpl) segmentRegistry).setControlNodeCnx(controlNodeCnx);
+    ((SegmentRegistryImpl) segmentRegistry).setNodeRegistry(nodeRegistry);
+    controllerService.setNodeRegistry(nodeRegistry);
 
-        @Override
-        public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
-            partition.get(request.getOffset()).thenAccept(getResult -> {
-                GetResponse response = GetResponse.newBuilder().setBatchRecord(getResult).build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
-            });
-        }
-    }
+    server =
+        ServerBuilder.forPort(9594)
+            .addService(recordService)
+            .addService(partitionService)
+            .addService(segmentService)
+            .addService(controllerService)
+            .addService(segmentRegistry)
+            .build();
+
+    schedule.scheduleWithFixedDelay(
+        () -> {
+          ControllerServiceProto.HeartbeatRequest heartbeatRequest =
+              ControllerServiceProto.HeartbeatRequest.newBuilder().setAddress(address).build();
+          dataNodeCnx.keepalive(heartbeatRequest);
+        },
+        1000,
+        1000,
+        TimeUnit.MILLISECONDS);
+
+    partitionRegistry.start();
+    partitionRegistry.createTopic("FOO", 1, 1);
+  }
+
+  public void start() throws IOException, InterruptedException {
+    server.start();
+    server.awaitTermination();
+  }
+
+  public static void main(String... args) throws IOException, InterruptedException {
+    new LinkyBrokerStartup().start();
+  }
 }

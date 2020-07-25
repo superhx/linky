@@ -26,6 +26,10 @@ public interface Partition {
 
     CompletableFuture<BatchRecord> get(long offset);
 
+    CompletableFuture<Void> open();
+
+    CompletableFuture<Void> close();
+
     class AppendResult {
         private Status status = Status.SUCCESS;
         private long   offset;

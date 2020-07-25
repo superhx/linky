@@ -10,7 +10,7 @@ option java_multiple_files = true;
 option java_outer_classname = "BatchRecordProto";
 
 message BatchRecord {
-    int32 topic = 1;
+    int32 topicId = 1;
     int32 partition = 2;
     int64 firstOffset = 3;
     repeated Record records = 4;

@@ -16,52 +16,74 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import java.util.concurrent.CompletableFuture;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.superhx.linky.service.proto.BatchRecord;
+import org.superhx.linky.service.proto.PartitionMeta;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class LocalPartitionImpl implements Partition {
-    private PersistenceFactory factory;
-    private volatile Segment   lastSegment;
+  private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
+  private PartitionMeta meta;
 
-    public LocalPartitionImpl(PersistenceFactory factory) {
-        this.factory = factory;
-    }
+  private List<Segment> segments;
+  private volatile Segment lastSegment;
+  private LocalSegmentManager localSegmentManager;
 
-    @Override
-    public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-        Segment segment = getLastSegment();
-        CompletableFuture<Segment.AppendResult> segmentAppendFuture = segment.append(batchRecord);
-        return segmentAppendFuture.handle((appendResult, throwable) -> {
-            if (throwable != null) {
-                throw new RuntimeException(throwable);
-            }
-            return new AppendResult(appendResult.getOffset());
-        });
-    }
+  public LocalPartitionImpl(PartitionMeta meta) {
+    this.meta = meta;
+  }
 
-    @Override
-    public CompletableFuture<BatchRecord> get(long offset) {
-        Segment segment = getLastSegment();
-        CompletableFuture<BatchRecord> segmentGetFuture = segment.get(offset);
-        return segmentGetFuture.handle((batchRecord, throwable) -> {
-            if (throwable != null) {
-                throw new RuntimeException(throwable);
-            }
-            return batchRecord;
-        });
-    }
+  @Override
+  public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
+    Segment segment = this.lastSegment;
+    return segment
+        .append(batchRecord)
+        .thenApply(appendResult -> new AppendResult(appendResult.getOffset()));
+  }
 
-    private Segment getLastSegment() {
-        if (lastSegment != null) {
-            return lastSegment;
-        }
-        synchronized (this) {
-            if (lastSegment != null) {
-                return lastSegment;
-            }
-            lastSegment = this.factory.newSegment();
-        }
-        return lastSegment;
+  @Override
+  public CompletableFuture<BatchRecord> get(long offset) {
+    Segment segment = this.lastSegment;
+    return segment.get(offset);
+  }
+
+  @Override
+  public CompletableFuture<Void> open() {
+    log.info("partition {} opening...", meta);
+    return localSegmentManager
+        .getSegments(meta.getTopicId(), meta.getPartition())
+        .thenCompose(
+            s -> {
+              segments = new CopyOnWriteArrayList<>(s);
+              return localSegmentManager.nextSegment(
+                  meta.getTopicId(),
+                  meta.getPartition(),
+                  segments.isEmpty()
+                      ? Segment.NO_INDEX
+                      : segments.get(segments.size() - 1).getIndex());
+            })
+        .thenCompose(
+            s -> {
+              this.lastSegment = s;
+              log.info("partition {} opened", meta);
+              return CompletableFuture.completedFuture(null);
+            });
+  }
+
+  @Override
+  public CompletableFuture<Void> close() {
+    segments = null;
+    if (lastSegment == null) {
+      return CompletableFuture.completedFuture(null);
     }
+    return lastSegment.seal().thenCompose(s -> CompletableFuture.completedFuture(null));
+  }
+
+  public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
+    this.localSegmentManager = localSegmentManager;
+  }
 }

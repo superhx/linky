@@ -16,11 +16,14 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import org.superhx.linky.service.proto.PartitionMeta;
+import org.superhx.linky.service.proto.SegmentMeta;
+
 public interface PersistenceFactory {
 
-    Partition newPartition();
+    Partition newPartition(PartitionMeta partitionMeta);
 
-    Segment newSegment();
+    Segment newSegment(SegmentMeta segmentMeta);
 
     WriteAheadLog newWriteAheadLog();
 
