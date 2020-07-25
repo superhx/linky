@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package linky;
+
+import "google/protobuf/any.proto";
+
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = true;
+option java_outer_classname = "PartitionMetaProto";
+
+message PartitionMeta {
+    int32 topicId = 1;
+    string topicId = 2;
+    int32 partition = 3;
+    string address = 4;
+}

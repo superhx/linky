@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package linky;
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "DiscoveryServiceProto";
+
+service DiscoveryService {
+    rpc getPartitions(GetPartitionsRequest) returns (GetPartitionsResponse) {};
+
+}
+
+message GetPartitionsRequest {
+    string topicId = 1;
+    int32 epoch = 2;
+}
+
+message GetPartitionsResponse {
+    int32 epoch = 1;
+    message Partition {
+        string address = 1;
+        int32 partition = 2;
+    }
+    repeated Partition partitions = 2;
+}
+

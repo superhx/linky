@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package linky.data;
+
+import 'BatchRecord.proto';
+import 'SegmentMeta.proto';
+
+option java_package = "org.superhx.linky.data.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "SegmentServiceProto";
+
+
+service SegmentService {
+    rpc get(GetRecordRequest) returns (GetRecordResponse) {}
+
+    rpc replicate(stream ReplicateRequest) returns (stream ReplicateResponse) {}
+
+    rpc create(CreateRequest) returns (CreateResponse) {}
+
+    rpc seal(SealRequest) returns (SealResponse) {}
+
+    rpc copyFrom(CopyFromRequest) returns (CopyFromResponse) {}
+}
+
+message GetRecordRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int64 offset = 3;
+}
+
+message GetRecordResponse {
+    enum Status {
+        SUCCESS = 0;
+        FAIL = 1;
+    }
+    Status status = 1;
+    BatchRecord batchRecord = 2;
+}
+
+message ReplicateRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+    BatchRecord batchRecord = 4;
+}
+
+message ReplicateResponse {
+    enum Status {
+        SUCCESS = 0;
+        FAIL = 1;
+    }
+    Status status = 1;
+    int64 confirmOffset = 2;
+}
+
+message CreateRequest {
+    int32 epoch = 1;
+    SegmentMeta segment = 2;
+}
+
+message CreateResponse {
+}
+
+message SealRequest {
+    int32 epoch = 1;
+    int32 topicId = 2;
+    int32 partition = 3;
+    int32 index = 4;
+}
+
+message SealResponse {
+    int64 endOffset = 1;
+}
+
+message CopyFromRequest {
+    int32 epoch = 1;
+    int32 topicId = 2;
+    int32 partition = 3;
+    int32 index = 4;
+    string address = 5;
+    int64 endOffset = 6;
+}
+
+message CopyFromResponse {
+}

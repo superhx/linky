@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package linky;
+
+import 'PartitionMeta.proto';
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "PartitionServiceProto";
+
+service PartitionService {
+    rpc close(CloseRequest) returns (CloseResponse) {}
+
+    rpc open(OpenRequest) returns (OpenResponse) {}
+}
+
+message CloseRequest {
+    int32 epoch = 1;
+    PartitionMeta meta = 2;
+}
+
+message CloseResponse {
+    enum Status {
+        SUCCESS = 0;
+    }
+    Status status = 1;
+}
+
+message OpenRequest {
+    int32 epoch = 1;
+    PartitionMeta meta = 2;
+}
+
+message OpenResponse {
+    enum Status {
+        SUCCESS = 0;
+    }
+    Status status = 1;
+}

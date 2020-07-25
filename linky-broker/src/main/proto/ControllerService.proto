@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package linky;
+
+import 'SegmentMeta.proto';
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "ControllerServiceProto";
+
+service ControllerService {
+    rpc heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+}
+
+message HeartbeatRequest {
+    int32 epoch = 1;
+    string address = 2;
+    repeated SegmentMeta segments = 3;
+    message Wal {
+        int32 index = 1;
+    }
+    repeated Wal wals = 4;
+}
+
+message HeartbeatResponse {
+    int32 epoch = 1;
+}

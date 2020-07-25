@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package linky;
+
+import "google/protobuf/any.proto";
+
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = true;
+option java_outer_classname = "SegmentMetaProto";
+
+message SegmentMeta {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+    int64 startOffset = 4;
+    int64 endOffset = 5;
+    int32 flag = 6;
+    message Replica {
+        int64 replicaOffset = 1;
+        string address = 2;
+        int32 index = 3;
+        int32 flag = 4;
+    }
+    repeated Replica replicas = 7;
+}

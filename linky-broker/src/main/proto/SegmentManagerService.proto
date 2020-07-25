@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package linky.controller;
+
+import 'SegmentMeta.proto';
+
+option java_package = "org.superhx.linky.controller.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "SegmentManagerServiceProto";
+
+service SegmentManagerService {
+    rpc create(CreateRequest) returns (CreateResponse) {}
+
+    rpc getSegments(GetSegmentsRequest) returns (GetSegmentsResponse) {}
+}
+
+message CreateRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 lastIndex = 3;
+    string address = 4;
+}
+
+message CreateResponse {
+    enum Status {
+        SUCCESS = 0;
+        FAIL = 1;
+    }
+    Status status = 1;
+}
+
+message GetSegmentsRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+}
+
+message GetSegmentsResponse {
+    repeated SegmentMeta segments = 1;
+}
