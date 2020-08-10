@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import org.superhx.linky.service.proto.BatchRecord;
+import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -60,7 +61,11 @@ public interface Segment {
      */
     void setEndOffset(long offset);
 
+    SegmentMeta getMeta();
+
     CompletableFuture<Void> seal();
+
+    CompletableFuture<Void> seal0();
 
     class AppendResult {
         private Status status = Status.SUCCESS;

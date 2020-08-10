@@ -29,6 +29,4 @@ public interface PartitionRegistry extends Lifecycle {
   CompletableFuture<List<PartitionMeta>> getPartitions(int topic);
 
   CompletableFuture<List<PartitionMeta>> getPartitions(String topic);
-
-  CompletableFuture<List<SegmentMeta>> getSegments(int topic, int partition);
 }

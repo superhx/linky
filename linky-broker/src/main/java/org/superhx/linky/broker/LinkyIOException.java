@@ -16,34 +16,12 @@
  */
 package org.superhx.linky.broker;
 
-import org.superhx.linky.broker.service.DataNodeCnx;
+public class LinkyIOException extends RuntimeException {
+    public LinkyIOException(Throwable cause) {
+        super(cause);
+    }
 
-public class BrokerContext {
-  private String address;
-  private String storePath;
-  private DataNodeCnx dataNodeCnx;
-
-  public String getAddress() {
-    return address;
-  }
-
-  public void setAddress(String address) {
-    this.address = address;
-  }
-
-  public String getStorePath() {
-    return System.getProperty("user.home") + "/linky/" + address;
-  }
-
-  public void setStorePath(String storePath) {
-    this.storePath = storePath;
-  }
-
-  public DataNodeCnx getDataNodeCnx() {
-    return dataNodeCnx;
-  }
-
-  public void setDataNodeCnx(DataNodeCnx dataNodeCnx) {
-    this.dataNodeCnx = dataNodeCnx;
-  }
+    public LinkyIOException(String message) {
+        super(message);
+    }
 }

@@ -8,13 +8,15 @@ public interface WriteAheadLog {
 
     CompletableFuture<AppendResult> append(BatchRecord batchRecord);
 
-    CompletableFuture<BatchRecord> get(long offset);
+    CompletableFuture<BatchRecord> get(long offset, int size);
 
     class AppendResult {
         private long offset;
+        private int size;
 
-        public AppendResult(long offset) {
+        public AppendResult(long offset, int size) {
             this.offset = offset;
+            this.size = size;
         }
 
         public long getOffset() {
@@ -23,6 +25,14 @@ public interface WriteAheadLog {
 
         public void setOffset(long offset) {
             this.offset = offset;
+        }
+
+        public int getSize() {
+            return size;
+        }
+
+        public void setSize(int size) {
+            this.size = size;
         }
     }
 }

@@ -17,54 +17,122 @@
 package org.superhx.linky.broker.service;
 
 import io.grpc.stub.StreamObserver;
-import org.superhx.linky.broker.persistence.Segment;
 import org.superhx.linky.broker.persistence.LocalSegmentManager;
+import org.superhx.linky.broker.persistence.Segment;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 
 public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
 
-    private LocalSegmentManager localSegmentManager;
+  private LocalSegmentManager localSegmentManager;
 
-    public SegmentService() {
-    }
+  public SegmentService() {}
 
-    @Override
-    public StreamObserver<SegmentServiceProto.ReplicateRequest> replicate(StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
+  @Override
+  public void get(
+      SegmentServiceProto.GetRecordRequest request,
+      StreamObserver<SegmentServiceProto.GetRecordResponse> responseObserver) {
+    super.get(request, responseObserver);
+    Segment segment =
+        localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    segment
+        .get(request.getOffset())
+        .thenAccept(
+            r -> {
+              responseObserver.onNext(
+                  SegmentServiceProto.GetRecordResponse.newBuilder().setBatchRecord(r).build());
+              responseObserver.onCompleted();
+            })
+        .exceptionally(
+            t -> {
+              responseObserver.onError(t);
+              return null;
+            });
+  }
 
-        return new StreamObserver<SegmentServiceProto.ReplicateRequest>() {
-            @Override
-            public void onNext(SegmentServiceProto.ReplicateRequest replicateRequest) {
-                Segment segment = localSegmentManager.getSegment(replicateRequest.getTopicId(), replicateRequest.getPartition(), replicateRequest.getIndex());
-                segment.replicate(replicateRequest.getBatchRecord()).thenAccept(rst -> {
-                    responseObserver.onNext(SegmentServiceProto.ReplicateResponse.newBuilder().setConfirmOffset(rst.getConfirmOffset()).build());
+  @Override
+  public StreamObserver<SegmentServiceProto.ReplicateRequest> replicate(
+      StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
+    return new StreamObserver<SegmentServiceProto.ReplicateRequest>() {
+      @Override
+      public void onNext(SegmentServiceProto.ReplicateRequest replicateRequest) {
+        Segment segment =
+            localSegmentManager.getSegment(
+                replicateRequest.getTopicId(),
+                replicateRequest.getPartition(),
+                replicateRequest.getIndex());
+        segment
+            .replicate(replicateRequest.getBatchRecord())
+            .thenAccept(
+                rst -> {
+                  responseObserver.onNext(
+                      SegmentServiceProto.ReplicateResponse.newBuilder()
+                          .setConfirmOffset(rst.getConfirmOffset())
+                          .build());
                 });
-            }
+      }
 
-            @Override
-            public void onError(Throwable throwable) {
-                throwable.printStackTrace();
-            }
+      @Override
+      public void onError(Throwable throwable) {
+        throwable.printStackTrace();
+      }
 
-            @Override
-            public void onCompleted() {
+      @Override
+      public void onCompleted() {}
+    };
+  }
 
-            }
-        };
-    }
+  @Override
+  public void create(
+      SegmentServiceProto.CreateRequest request,
+      StreamObserver<SegmentServiceProto.CreateResponse> responseObserver) {
+    localSegmentManager
+        .createSegment(request.getSegment())
+        .thenAccept(
+            r -> {
+              responseObserver.onNext(SegmentServiceProto.CreateResponse.newBuilder().build());
+              responseObserver.onCompleted();
+            })
+        .exceptionally(
+            t -> {
+              responseObserver.onError(t);
+              return null;
+            });
+  }
 
-    @Override
-    public void create(SegmentServiceProto.CreateRequest request, StreamObserver<SegmentServiceProto.CreateResponse> responseObserver) {
-        localSegmentManager.createSegment(request.getSegment()).thenAccept(r -> {
-            responseObserver.onNext(SegmentServiceProto.CreateResponse.newBuilder().build());
-            responseObserver.onCompleted();
-        }).exceptionally(t -> {
-            responseObserver.onError(t);
-            return null;
-        });
-    }
+  @Override
+  public void seal(
+      SegmentServiceProto.SealRequest request,
+      StreamObserver<SegmentServiceProto.SealResponse> responseObserver) {
+    Segment segment =
+        this.localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    segment
+        .seal0()
+        .thenAccept(
+            r -> {
+              responseObserver.onNext(
+                  SegmentServiceProto.SealResponse.newBuilder()
+                      .setEndOffset(segment.getEndOffset())
+                      .build());
+              responseObserver.onCompleted();
+            })
+        .exceptionally(
+            t -> {
+              responseObserver.onError(t);
+              return null;
+            });
+  }
 
-    public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
-        this.localSegmentManager = localSegmentManager;
-    }
+  @Override
+  public void copyFrom(
+      SegmentServiceProto.CopyFromRequest request,
+      StreamObserver<SegmentServiceProto.CopyFromResponse> responseObserver) {
+    super.copyFrom(request, responseObserver);
+  }
+
+  public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
+    this.localSegmentManager = localSegmentManager;
+  }
 }

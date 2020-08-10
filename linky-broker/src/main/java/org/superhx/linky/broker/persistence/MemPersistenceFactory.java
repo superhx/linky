@@ -22,7 +22,7 @@ import org.superhx.linky.service.proto.SegmentMeta;
 
 public class MemPersistenceFactory implements PersistenceFactory {
   private LocalSegmentManager localSegmentManager;
-  private WriteAheadLog writeAheadLog = new MemoryWriteAheadLog();
+  private WriteAheadLog writeAheadLog;
   private BrokerContext brokerContext;
 
   @Override
@@ -39,7 +39,11 @@ public class MemPersistenceFactory implements PersistenceFactory {
   }
 
   @Override
-  public WriteAheadLog newWriteAheadLog() {
+  public synchronized WriteAheadLog newWriteAheadLog() {
+    if (writeAheadLog != null) {
+      return writeAheadLog;
+    }
+    writeAheadLog = new LocalWriteAheadLog(brokerContext.getStorePath() + "/wal/logs");
     return writeAheadLog;
   }
 

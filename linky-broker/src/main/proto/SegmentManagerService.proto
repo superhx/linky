@@ -12,6 +12,8 @@ service SegmentManagerService {
     rpc create(CreateRequest) returns (CreateResponse) {}
 
     rpc getSegments(GetSegmentsRequest) returns (GetSegmentsResponse) {}
+
+    rpc seal(SealRequest) returns (SealResponse) {}
 }
 
 message CreateRequest {
@@ -19,6 +21,7 @@ message CreateRequest {
     int32 partition = 2;
     int32 lastIndex = 3;
     string address = 4;
+    int64 startOffset = 5;
 }
 
 message CreateResponse {
@@ -36,4 +39,14 @@ message GetSegmentsRequest {
 
 message GetSegmentsResponse {
     repeated SegmentMeta segments = 1;
+}
+
+message SealRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+}
+
+message SealResponse {
+    int64 endOffset = 2;
 }

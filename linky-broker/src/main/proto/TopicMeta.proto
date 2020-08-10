@@ -11,7 +11,7 @@ option java_outer_classname = "TopicMetaProto";
 
 message TopicMeta {
     int32 id = 1;
-    string topicId = 2;
+    string topic = 2;
     int32 partitionNum = 3;
     int32 replicaNum = 4;
 }

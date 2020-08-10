@@ -42,10 +42,12 @@ public class LinkyBrokerStartup {
   Server server;
 
   public LinkyBrokerStartup() {
-    String address = System.getProperty("address", "127.0.0.1:9594");
+    String port = System.getProperty("port", "9594");
     BrokerContext brokerContext = new BrokerContext();
-    brokerContext.setAddress(address);
-    log.info("broker {} startup", address);
+    brokerContext.setAddress("127.0.0.1:" + port);
+    log.info("broker {} startup", port);
+
+    KVStore kvStore = new KVStore();
 
     RecordService recordService = new RecordService();
     PartitionService partitionService = new PartitionService();
@@ -59,9 +61,13 @@ public class LinkyBrokerStartup {
     segmentService.setLocalSegmentManager(localSegmentManager);
     localSegmentManager.setDataNodeCnx(dataNodeCnx);
     localSegmentManager.setPersistenceFactory(persistenceFactory);
+    localSegmentManager.setBrokerContext(brokerContext);
     ((MemPersistenceFactory) persistenceFactory).setBrokerContext(brokerContext);
     ((MemPersistenceFactory) persistenceFactory).setLocalSegmentManager(localSegmentManager);
     dataNodeCnx.setBrokerContext(brokerContext);
+    brokerContext.setDataNodeCnx(dataNodeCnx);
+
+    localSegmentManager.init();
 
     ControlNodeCnx controlNodeCnx = new ControlNodeCnx();
     PartitionRegistry partitionRegistry = new PartitionRegistryImpl();
@@ -72,12 +78,18 @@ public class LinkyBrokerStartup {
     ((PartitionRegistryImpl) partitionRegistry).setControlNodeCnx(controlNodeCnx);
     ((PartitionRegistryImpl) partitionRegistry).setNodeRegistry(nodeRegistry);
     ((PartitionRegistryImpl) partitionRegistry).setSegmentRegistry(segmentRegistry);
-    ((SegmentRegistryImpl) segmentRegistry).setControlNodeCnx(controlNodeCnx);
-    ((SegmentRegistryImpl) segmentRegistry).setNodeRegistry(nodeRegistry);
+    ((PartitionRegistryImpl) partitionRegistry).setKvStore(kvStore);
+    segmentRegistry.setControlNodeCnx(controlNodeCnx);
+    segmentRegistry.setNodeRegistry(nodeRegistry);
+    segmentRegistry.setBrokerContext(brokerContext);
+    segmentRegistry.setKvStore(kvStore);
     controllerService.setNodeRegistry(nodeRegistry);
+    controllerService.setSegmentRegistry(segmentRegistry);
+
+    segmentRegistry.init();
 
     server =
-        ServerBuilder.forPort(9594)
+        ServerBuilder.forPort(Integer.valueOf(port))
             .addService(recordService)
             .addService(partitionService)
             .addService(segmentService)
@@ -88,7 +100,9 @@ public class LinkyBrokerStartup {
     schedule.scheduleWithFixedDelay(
         () -> {
           ControllerServiceProto.HeartbeatRequest heartbeatRequest =
-              ControllerServiceProto.HeartbeatRequest.newBuilder().setAddress(address).build();
+              ControllerServiceProto.HeartbeatRequest.newBuilder()
+                  .setAddress(brokerContext.getAddress())
+                  .build();
           dataNodeCnx.keepalive(heartbeatRequest);
         },
         1000,
@@ -105,6 +119,8 @@ public class LinkyBrokerStartup {
   }
 
   public static void main(String... args) throws IOException, InterruptedException {
+
+    System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "debug");
     new LinkyBrokerStartup().start();
   }
 }

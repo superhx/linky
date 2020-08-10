@@ -16,12 +16,11 @@
  */
 package org.superhx.linky.broker.loadbalance;
 
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
-import org.superhx.linky.service.proto.SegmentMeta;
 import org.superhx.linky.service.proto.TopicMeta;
 
 import java.util.*;
@@ -35,19 +34,48 @@ public class PartitionRegistryImpl implements PartitionRegistry {
   private Map<Integer, TopicMeta> topicIdMetaMap = new ConcurrentHashMap<>();
   private Map<String, TopicMeta> topicMetas = new ConcurrentHashMap<>();
   private Map<Integer, List<PartitionMeta>> topicPartitionMap = new ConcurrentHashMap<>();
-  private Map<Long, List<Integer>> partitionSegmentMap = new ConcurrentHashMap<>();
   private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
 
   private NodeRegistry nodeRegistry;
   private SegmentRegistry segmentRegistry;
   private ControlNodeCnx controlNodeCnx;
+  private KVStore kvStore;
 
   public void start() {
+    try {
+      kvStore
+          .get("topics/")
+          .thenAccept(
+              r -> {
+                r.getKvs().stream()
+                    .forEach(
+                        m -> {
+                          try {
+                            TopicMeta meta = TopicMeta.parseFrom(m.getValue().getBytes());
+                            topicIdMetaMap.put(meta.getId(), meta);
+                            topicMetas.put(meta.getTopic(), meta);
+                            if (topicIdCounter.get() < meta.getId()) {
+                              topicIdCounter.set(meta.getId());
+                            }
+                            log.info("load topic config {}", meta);
+                          } catch (InvalidProtocolBufferException e) {
+                            e.printStackTrace();
+                          }
+                        });
+              })
+          .get();
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+
     schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 1000, TimeUnit.MILLISECONDS);
   }
 
   @Override
   public CompletableFuture<Void> createTopic(String topic, int partitionNum, int replicaNum) {
+    if (topicMetas.containsKey(topic)) {
+      return CompletableFuture.completedFuture(null);
+    }
     int id = topicIdCounter.incrementAndGet();
     TopicMeta meta =
         TopicMeta.newBuilder()
@@ -58,6 +86,7 @@ public class PartitionRegistryImpl implements PartitionRegistry {
             .build();
     topicMetas.put(topic, meta);
     topicIdMetaMap.put(id, meta);
+    kvStore.put("topics/" + id, meta.toByteArray());
     return rebalance().thenAccept(r -> {});
   }
 
@@ -77,33 +106,15 @@ public class PartitionRegistryImpl implements PartitionRegistry {
     return getPartitions(meta.getId());
   }
 
-  @Override
-  public CompletableFuture<List<SegmentMeta>> getSegments(int topic, int partition) {
-    long topicPartitionId = Utils.topicPartitionId(topic, partition);
-    List<Integer> segmentIndexes = partitionSegmentMap.get(topicPartitionId);
-    if (segmentIndexes == null || segmentIndexes.size() == 0) {
-      return CompletableFuture.completedFuture(Collections.emptyList());
-    }
-
-    Map<Integer, SegmentMeta> indexSegmentMap = segmentRegistry.getSegmentMetas(topic, partition);
-    for (Integer index : segmentIndexes) {
-      if (!indexSegmentMap.containsKey(index)) {
-        // TODO; none segment
-        throw new RuntimeException("replica lost");
-      }
-    }
-    return CompletableFuture.completedFuture(
-        indexSegmentMap.values().stream()
-            .sorted(Comparator.comparingInt(SegmentMeta::getIndex))
-            .collect(Collectors.toList()));
-  }
-
   private CompletableFuture<Void> rebalance() {
     rebalance0();
     return CompletableFuture.completedFuture(null);
   }
 
   private void rebalance0() {
+    if ("datanode".equals(System.getProperty("role"))) {
+      return;
+    }
     Map<Integer, List<PartitionMeta>> newTopicPartitionMap = new HashMap<>();
     List<TopicMeta> topicMetas = new ArrayList<>(topicIdMetaMap.values());
     Collections.sort(topicMetas, Comparator.comparing(TopicMeta::getTopic));
@@ -113,6 +124,10 @@ public class PartitionRegistryImpl implements PartitionRegistry {
       log.info("cannot find node in cluster, exit rebalance");
       return;
     }
+    //    if (nodes.size() < 2) {
+    //      log.info("only 1 node in cluster, exit rebalance");
+    //      return;
+    //    }
 
     int counter = 0;
     for (TopicMeta topicMeta : topicMetas) {
@@ -183,5 +198,9 @@ public class PartitionRegistryImpl implements PartitionRegistry {
 
   public void setControlNodeCnx(ControlNodeCnx controlNodeCnx) {
     this.controlNodeCnx = controlNodeCnx;
+  }
+
+  public void setKvStore(KVStore kvStore) {
+    this.kvStore = kvStore;
   }
 }

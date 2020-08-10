@@ -24,6 +24,4 @@ public interface SegmentRegistry {
 
     void register(SegmentMeta segment);
 
-    Map<Integer, SegmentMeta> getSegmentMetas(int topic, int partition);
-
 }

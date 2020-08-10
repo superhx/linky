@@ -16,23 +16,4 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import java.util.LinkedList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-
-import org.superhx.linky.service.proto.BatchRecord;
-
-public class MemoryWriteAheadLog implements WriteAheadLog {
-    private List<BatchRecord> records = new LinkedList<>();
-
-    @Override
-    public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-        records.add(batchRecord);
-        return CompletableFuture.completedFuture(new AppendResult(records.size() - 1));
-    }
-
-    @Override
-    public CompletableFuture<BatchRecord> get(long offset) {
-        return CompletableFuture.completedFuture(records.get((int) offset));
-    }
-}
+public class StoreException extends Exception {}

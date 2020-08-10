@@ -130,7 +130,7 @@ public class ControlNodeCnx {
     return PartitionServiceGrpc.newStub(channel);
   }
 
-  private SegmentServiceGrpc.SegmentServiceStub getSegmentServiceStub(String address) {
+  public SegmentServiceGrpc.SegmentServiceStub getSegmentServiceStub(String address) {
     Channel channel = getChannel(address);
     return SegmentServiceGrpc.newStub(channel);
   }

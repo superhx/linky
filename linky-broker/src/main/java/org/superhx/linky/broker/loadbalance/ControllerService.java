@@ -20,18 +20,34 @@ import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.ControllerServiceGrpc;
 import org.superhx.linky.service.proto.ControllerServiceProto;
 import org.superhx.linky.service.proto.NodeMeta;
+import org.superhx.linky.service.proto.SegmentMeta;
 
 public class ControllerService extends ControllerServiceGrpc.ControllerServiceImplBase {
   private NodeRegistry nodeRegistry;
+  private SegmentRegistry segmentRegistry;
 
   @Override
   public void heartbeat(
       ControllerServiceProto.HeartbeatRequest request,
       StreamObserver<ControllerServiceProto.HeartbeatResponse> responseObserver) {
-    nodeRegistry.register(NodeMeta.newBuilder().setAddress(request.getAddress()).build());
+    nodeRegistry
+        .register(NodeMeta.newBuilder().setAddress(request.getAddress()).build())
+        .thenAccept(
+            r -> {
+              responseObserver.onNext(
+                  ControllerServiceProto.HeartbeatResponse.newBuilder().build());
+              responseObserver.onCompleted();
+            });
+    for (SegmentMeta segmentMeta : request.getSegmentsList()) {
+      segmentRegistry.register(segmentMeta);
+    }
   }
 
   public void setNodeRegistry(NodeRegistry nodeRegistry) {
     this.nodeRegistry = nodeRegistry;
+  }
+
+  public void setSegmentRegistry(SegmentRegistry segmentRegistry) {
+    this.segmentRegistry = segmentRegistry;
   }
 }

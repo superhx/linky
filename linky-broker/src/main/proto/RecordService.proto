@@ -16,7 +16,7 @@ service RecordService {
 }
 
 message PutRequest {
-    string topicId = 1;
+    string topic = 1;
     int32 partition = 2;
     BatchRecord batchRecord = 3;
 }
@@ -31,7 +31,7 @@ message PutResponse {
 }
 
 message GetRequest {
-    string topicId = 1;
+    string topic = 1;
     int32 partition = 2;
     int64 offset = 3;
 }

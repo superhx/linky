@@ -19,6 +19,7 @@ package org.superhx.linky.broker.service;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.persistence.Partition;
 import org.superhx.linky.broker.persistence.PersistenceFactory;
 import org.superhx.linky.service.proto.PartitionMeta;
@@ -54,7 +55,7 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
 
   public CompletableFuture<OpenResponse> open(OpenRequest request) {
     PartitionMeta meta = request.getMeta();
-    long topicPartition = getTopicPartition(meta.getTopicId(), meta.getPartition());
+    long topicPartition = Utils.topicPartitionId(meta.getTopicId(), meta.getPartition());
     Partition partition = partitions.get(topicPartition);
     if (partition == null) {
       partition = persistenceFactory.newPartition(meta);
@@ -70,7 +71,7 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
   }
 
   public Partition getPartition(int topic, int partition) {
-    return partitions.get(getTopicPartition(topic, partition));
+    return partitions.get(Utils.topicPartitionId(topic, partition));
   }
 
   public Partition getPartition(String topic, int partition) {
@@ -102,7 +103,7 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
             })
         .exceptionally(
             t -> {
-                log.warn("partition open {} fail", request.getMeta(), t);
+              log.warn("partition open {} fail", request.getMeta(), t);
               responseObserver.onError(t);
               responseObserver.onCompleted();
               return null;

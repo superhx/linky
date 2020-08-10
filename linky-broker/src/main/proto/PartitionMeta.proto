@@ -11,7 +11,7 @@ option java_outer_classname = "PartitionMetaProto";
 
 message PartitionMeta {
     int32 topicId = 1;
-    string topicId = 2;
+    string topic = 2;
     int32 partition = 3;
     string address = 4;
 }

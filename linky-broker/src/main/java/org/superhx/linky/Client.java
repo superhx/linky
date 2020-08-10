@@ -22,22 +22,26 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.*;
 
+import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Client {
+    static int count = 2;
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
         ManagedChannelBuilder.forTarget("localhost:9594").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
-    for (int i = 0; i < 5; i++) {
+    final AtomicLong maxOffset = new AtomicLong();
+    for (int i = 0; i < count; i++) {
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
               .addRecords(
                   Record.newBuilder()
                       .setKey("rk")
-                      .setValue(ByteString.copyFrom(("hello world " + i).getBytes()))
+                      .setValue(ByteString.copyFrom((new Date()+ " hello world " + i).getBytes()))
                       .build())
               .build();
       PutRequest request =
@@ -49,6 +53,9 @@ public class Client {
             @Override
             public void onNext(PutResponse putResponse) {
               System.out.println(String.format("req %s return %s", request, putResponse));
+              if (maxOffset.get() < putResponse.getOffset() + 1) {
+                  maxOffset.set( putResponse.getOffset() + 1);
+              }
             }
 
             @Override
@@ -65,7 +72,7 @@ public class Client {
       latch.await();
     }
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < maxOffset.get(); i++) {
       CountDownLatch latch = new CountDownLatch(1);
 
       stub.get(
