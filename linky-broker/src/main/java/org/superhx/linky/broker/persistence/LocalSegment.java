@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -65,7 +66,7 @@ public class LocalSegment implements Segment {
   private DataNodeCnx dataNodeCnx;
   private String storePath;
   private MappedFiles mappedFiles;
-  private int replicaLossCount;
+  private Set<String> failedReplicas = new CopyOnWriteArraySet<>();
 
   public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext) {
     this.storePath =
@@ -143,10 +144,10 @@ public class LocalSegment implements Segment {
 
                                           @Override
                                           public void onError(Throwable throwable) {
-                                            log.warn("replica segment fail", throwable);
-                                            replicaLossCount++;
+                                            log.warn("replica segment {} fail", r.getAddress());
+                                            failedReplicas.add(r.getAddress());
                                             status =
-                                                replicaLossCount
+                                                failedReplicas.size()
                                                         < (meta.getReplicasList().size() + 1) / 2
                                                     ? Status.REPLICA_LOSS
                                                     : Status.REPLICA_BREAK;

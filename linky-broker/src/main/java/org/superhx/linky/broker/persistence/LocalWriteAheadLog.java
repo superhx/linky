@@ -76,7 +76,6 @@ public class LocalWriteAheadLog implements WriteAheadLog {
         .thenApply(
             b -> {
               ByteBuffer data = b.slice();
-              System.out.println("pos " + offset + "size" + data.getInt());
               data.getInt();
               try {
                 return BatchRecord.parseFrom(data);

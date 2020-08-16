@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,11 +40,16 @@ public class LocalPartitionImpl implements Partition {
   private volatile Segment lastSegment;
   private NavigableMap<Long, Segment> segmentStartOffsets = new ConcurrentSkipListMap<>();
   private LocalSegmentManager localSegmentManager;
-  private CompletableFuture lastSegmentFuture;
-  private long nextSegmentStartOffset;
+  private CompletableFuture<Segment> lastSegmentFuture;
+  private Map<Segment, CompletableFuture<Segment>> nextSegmentFutures = new ConcurrentHashMap<>();
 
   public LocalPartitionImpl(PartitionMeta meta) {
     this.meta = meta;
+  }
+
+  class FlushTask implements Runnable {
+    @Override
+    public void run() {}
   }
 
   @Override
@@ -56,9 +62,7 @@ public class LocalPartitionImpl implements Partition {
                   return s.append(batchRecord);
                 case REPLICA_LOSS:
                 case REPLICA_BREAK:
-                  return s.seal()
-                      .thenCompose(n -> nextSegment(s.getEndOffset()))
-                      .thenCompose(n -> n.append(batchRecord));
+                  return nextSegment(s).thenCompose(n -> n.append(batchRecord));
               }
               throw new LinkyIOException(String.format("Unknown status %s", s.getStatus()));
             })
@@ -72,6 +76,14 @@ public class LocalPartitionImpl implements Partition {
     synchronized (this) {
       if (lastSegmentFuture != null) {
         return lastSegmentFuture;
+      }
+
+      long nextSegmentStartOffset = 0;
+      for (int i = 0; i < segments.size(); i++) {
+        Segment segment = segments.get(i);
+        if (segment.getStartOffset() < segment.getEndOffset()) {
+          nextSegmentStartOffset = segments.get(i).getEndOffset();
+        }
       }
       lastSegmentFuture = new CompletableFuture();
       localSegmentManager
@@ -91,22 +103,43 @@ public class LocalPartitionImpl implements Partition {
     }
   }
 
-  protected CompletableFuture<Segment> nextSegment(long startOffset) {
-    lastSegmentFuture = new CompletableFuture();
-    localSegmentManager
-        .nextSegment(
-            meta.getTopicId(),
-            meta.getPartition(),
-            segments.isEmpty() ? Segment.NO_INDEX : segments.get(segments.size() - 1).getIndex(),
-            startOffset)
-        .thenAccept(
-            s -> {
-              lastSegmentFuture.complete(s);
-              this.lastSegment = s;
-              segmentStartOffsets.put(this.lastSegment.getStartOffset(), this.lastSegment);
-              segments.add(this.lastSegment);
-            });
-    return lastSegmentFuture;
+  protected CompletableFuture<Segment> nextSegment(Segment lastSegment) {
+    CompletableFuture<Segment> future = nextSegmentFutures.get(lastSegment);
+    if (future != null) {
+      return future;
+    }
+    synchronized (this) {
+      future = nextSegmentFutures.get(lastSegment);
+      if (future != null) {
+        return future;
+      }
+      future = new CompletableFuture<>();
+      nextSegmentFutures.put(lastSegment, future);
+      lastSegment
+          .seal()
+          .thenCompose(
+              n ->
+                  localSegmentManager.nextSegment(
+                      meta.getTopicId(),
+                      meta.getPartition(),
+                      lastSegment.getIndex(),
+                      lastSegment.getEndOffset()))
+          .thenAccept(
+              s -> {
+                this.lastSegment = s;
+                segmentStartOffsets.put(s.getStartOffset(), s);
+                segments.add(s);
+                nextSegmentFutures.get(lastSegment).complete(s);
+                lastSegmentFuture = nextSegmentFutures.get(lastSegment);
+              })
+          .exceptionally(
+              t -> {
+                t.printStackTrace();
+                nextSegmentFutures.remove(lastSegment);
+                return null;
+              });
+      return future;
+    }
   }
 
   @Override
@@ -148,7 +181,6 @@ public class LocalPartitionImpl implements Partition {
                 Segment segment = segments.get(i);
                 if (segment.getStartOffset() < segment.getEndOffset()) {
                   segmentStartOffsets.put(segment.getStartOffset(), segment);
-                  nextSegmentStartOffset = segments.get(segments.size() - 1).getEndOffset();
                 }
               }
               log.info("partition {} opened", meta);
