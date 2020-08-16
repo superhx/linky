@@ -77,6 +77,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
             b -> {
               ByteBuffer data = b.slice();
               data.getInt();
+              data.getInt();
               try {
                 return BatchRecord.parseFrom(data);
               } catch (InvalidProtocolBufferException e) {
