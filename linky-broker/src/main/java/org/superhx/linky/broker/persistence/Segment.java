@@ -22,86 +22,111 @@ import org.superhx.linky.service.proto.SegmentMeta;
 import java.util.concurrent.CompletableFuture;
 
 public interface Segment {
-    int NO_INDEX = -1;
-    long NO_OFFSET = -1L;
+  int FOLLOWER_MARK = 1 << 0;
+  int SEAL_MARK = 1 << 1;
+  int NO_INDEX = -1;
+  long NO_OFFSET = -1L;
 
-    CompletableFuture<AppendResult> append(BatchRecord batchRecord);
+  CompletableFuture<AppendResult> append(BatchRecord batchRecord);
 
-    CompletableFuture<ReplicateResult> replicate(BatchRecord batchRecord);
+  CompletableFuture<ReplicateResult> replicate(BatchRecord batchRecord);
 
-    CompletableFuture<BatchRecord> get(long offset);
+  CompletableFuture<BatchRecord> get(long offset);
 
-    int getIndex();
+  int getIndex();
 
-    /**
-     * get inclusive relative start offset
-     *
-     * @return
-     */
-    long getStartOffset();
+  /**
+   * get inclusive relative start offset
+   *
+   * @return
+   */
+  long getStartOffset();
 
-    /**
-     * set inclusive relative start offset
-     *
-     * @param offset
-     */
-    void setStartOffset(long offset);
+  /**
+   * set inclusive relative start offset
+   *
+   * @param offset
+   */
+  void setStartOffset(long offset);
 
-    /**
-     * get exclusive relative end offset
-     *
-     * @return offset
-     */
-    long getEndOffset();
+  /**
+   * get exclusive relative end offset
+   *
+   * @return offset
+   */
+  long getEndOffset();
 
-    /**
-     * set exclusive relative end offset
-     *
-     * @param offset
-     */
-    void setEndOffset(long offset);
+  /**
+   * set exclusive relative end offset
+   *
+   * @param offset
+   */
+  void setEndOffset(long offset);
 
-    SegmentMeta getMeta();
+  SegmentMeta getMeta();
 
-    CompletableFuture<Void> seal();
+  CompletableFuture<Void> seal();
 
-    CompletableFuture<Void> seal0();
+  CompletableFuture<Void> seal0();
 
-    class AppendResult {
-        private Status status = Status.SUCCESS;
-        private long offset;
+  default Status getStatus() {
+    return Status.WRITABLE;
+  }
 
-        public AppendResult(long offset) {
-            this.offset = offset;
-        }
-
-        public long getOffset() {
-            return offset;
-        }
-
-        public void setOffset(long offset) {
-            this.offset = offset;
-        }
-    }
-
-    class ReplicateResult {
-        private Status status = Status.SUCCESS;
-        private long confirmOffset;
-
-        public ReplicateResult(long confirmOffset) {
-            this.confirmOffset = confirmOffset;
-        }
-
-        public long getConfirmOffset() {
-            return confirmOffset;
-        }
-
-        public void setConfirmOffset(long confirmOffset) {
-            this.confirmOffset = confirmOffset;
-        }
-    }
-
+  class AppendResult {
     enum Status {
-        SUCCESS;
+      SUCCESS,
+      REPLICA_LOSS,
+      REPLICA_BREAK
     }
+
+    private Status status = Status.SUCCESS;
+    private long offset;
+
+    public AppendResult(Status status, long offset) {
+      this.status = status;
+      this.offset = offset;
+    }
+
+    public AppendResult(long offset) {
+      this.offset = offset;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
+
+    public void setOffset(long offset) {
+      this.offset = offset;
+    }
+  }
+
+  class ReplicateResult {
+    enum Status {
+      SUCCESS,
+    }
+
+    private Status status = Status.SUCCESS;
+    private long confirmOffset;
+
+    public ReplicateResult(long confirmOffset) {
+      this.confirmOffset = confirmOffset;
+    }
+
+    public long getConfirmOffset() {
+      return confirmOffset;
+    }
+
+    public void setConfirmOffset(long confirmOffset) {
+      this.confirmOffset = confirmOffset;
+    }
+  }
+
+  enum Status {
+    WRITABLE,
+    REPLICA_LOSS,
+    READONLY,
+    FULL,
+    REPLICA_BREAK
+  }
 }

@@ -117,9 +117,7 @@ public class LocalSegmentManager {
                 SegmentKey key =
                     new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
                 Segment segment = segments.get(key);
-                if (segment == null) {
-                  segment = persistenceFactory.newSegment(meta);
-                }
+                segment = new RemoteSegment(meta, segment, brokerContext);
                 segmentList.add(segment);
               }
               return CompletableFuture.completedFuture(segmentList);

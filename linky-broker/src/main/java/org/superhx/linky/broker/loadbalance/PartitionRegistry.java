@@ -19,12 +19,15 @@ package org.superhx.linky.broker.loadbalance;
 import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
+import org.superhx.linky.service.proto.TopicMeta;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public interface PartitionRegistry extends Lifecycle {
   CompletableFuture<Void> createTopic(String topic, int partitionNum, int replicaNum);
+
+  TopicMeta getTopicMeta(int topicId);
 
   CompletableFuture<List<PartitionMeta>> getPartitions(int topic);
 

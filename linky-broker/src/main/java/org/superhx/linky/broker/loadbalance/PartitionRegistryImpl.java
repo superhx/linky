@@ -26,19 +26,19 @@ import org.superhx.linky.service.proto.TopicMeta;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 public class PartitionRegistryImpl implements PartitionRegistry {
   private static final Logger log = LoggerFactory.getLogger(PartitionRegistryImpl.class);
   private AtomicInteger topicIdCounter = new AtomicInteger();
   private Map<Integer, TopicMeta> topicIdMetaMap = new ConcurrentHashMap<>();
   private Map<String, TopicMeta> topicMetas = new ConcurrentHashMap<>();
-  private Map<Integer, List<PartitionMeta>> topicPartitionMap = new ConcurrentHashMap<>();
+  private Map<Integer, Map<Integer, PartitionMeta>> topicPartitionMap = new ConcurrentHashMap<>();
   private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
 
   private NodeRegistry nodeRegistry;
   private SegmentRegistry segmentRegistry;
   private ControlNodeCnx controlNodeCnx;
+  private LinkyElection election;
   private KVStore kvStore;
 
   public void start() {
@@ -54,6 +54,7 @@ public class PartitionRegistryImpl implements PartitionRegistry {
                             TopicMeta meta = TopicMeta.parseFrom(m.getValue().getBytes());
                             topicIdMetaMap.put(meta.getId(), meta);
                             topicMetas.put(meta.getTopic(), meta);
+                            topicPartitionMap.put(meta.getId(), new ConcurrentHashMap<>());
                             if (topicIdCounter.get() < meta.getId()) {
                               topicIdCounter.set(meta.getId());
                             }
@@ -68,7 +69,7 @@ public class PartitionRegistryImpl implements PartitionRegistry {
       e.printStackTrace();
     }
 
-    schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 1000, TimeUnit.MILLISECONDS);
+    schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 5000, TimeUnit.MILLISECONDS);
   }
 
   @Override
@@ -84,6 +85,7 @@ public class PartitionRegistryImpl implements PartitionRegistry {
             .setPartitionNum(partitionNum)
             .setReplicaNum(replicaNum)
             .build();
+    topicPartitionMap.put(id, new ConcurrentHashMap<>());
     topicMetas.put(topic, meta);
     topicIdMetaMap.put(id, meta);
     kvStore.put("topics/" + id, meta.toByteArray());
@@ -91,9 +93,14 @@ public class PartitionRegistryImpl implements PartitionRegistry {
   }
 
   @Override
+  public TopicMeta getTopicMeta(int topicId) {
+    return topicIdMetaMap.get(topicId);
+  }
+
+  @Override
   public CompletableFuture<List<PartitionMeta>> getPartitions(int topic) {
     TopicMeta meta = topicIdMetaMap.get(topic);
-    List<PartitionMeta> partitions = topicPartitionMap.get(topic);
+    List<PartitionMeta> partitions = new ArrayList<>(topicPartitionMap.get(topic).values());
     if (partitions == null) {
       // TODO: fill blank partitions
     }
@@ -107,12 +114,16 @@ public class PartitionRegistryImpl implements PartitionRegistry {
   }
 
   private CompletableFuture<Void> rebalance() {
-    rebalance0();
+    try {
+      rebalance0();
+    } catch (Throwable e) {
+      log.error("rebalance fail", e);
+    }
     return CompletableFuture.completedFuture(null);
   }
 
   private void rebalance0() {
-    if ("datanode".equals(System.getProperty("role"))) {
+    if (!election.isLeader()) {
       return;
     }
     Map<Integer, List<PartitionMeta>> newTopicPartitionMap = new HashMap<>();
@@ -145,10 +156,11 @@ public class PartitionRegistryImpl implements PartitionRegistry {
       newTopicPartitionMap.put(topicMeta.getId(), partitionMetas);
     }
 
+    List<CompletableFuture<?>> futures = new LinkedList<>();
     for (Integer topic : newTopicPartitionMap.keySet()) {
       List<PartitionMeta> newPartitionMetas = newTopicPartitionMap.get(topic);
       List<PartitionMeta> oldPartitionMetas =
-          topicPartitionMap.getOrDefault(topic, Collections.emptyList());
+          new ArrayList<>(topicPartitionMap.get(topic).values());
       List<PartitionMeta> open = new LinkedList<>();
       List<PartitionMeta> close = new LinkedList<>();
       int partitionIndex = 0;
@@ -164,28 +176,45 @@ public class PartitionRegistryImpl implements PartitionRegistry {
         open.add(newPartitionMeta);
       }
       for (; partitionIndex < newPartitionMetas.size(); partitionIndex++) {
+        close.add(null);
         open.add(newPartitionMetas.get(partitionIndex));
       }
       for (; partitionIndex < oldPartitionMetas.size(); partitionIndex++) {
         close.add(oldPartitionMetas.get(partitionIndex));
+        open.add(null);
       }
       if (open.size() == 0 && close.size() == 0) {
         continue;
       }
-      CompletableFuture.allOf(
-              close.stream()
-                  .map(meta -> controlNodeCnx.closePartition(meta))
-                  .collect(Collectors.toList())
-                  .toArray(new CompletableFuture[0]))
-          .join();
-      CompletableFuture.allOf(
-              open.stream()
-                  .map(meta -> controlNodeCnx.openPartition(meta).thenAccept(r -> {}))
-                  .collect(Collectors.toList())
-                  .toArray(new CompletableFuture[0]))
-          .join();
-      topicPartitionMap.put(topic, newPartitionMetas);
+      for (int i = 0; i < open.size(); i++) {
+        PartitionMeta closeMeta = close.get(i);
+        PartitionMeta openMeta = open.get(i);
+        futures.add(
+            controlNodeCnx
+                .closePartition(closeMeta)
+                .handle(
+                    (r, t) -> {
+                      if (t != null) {
+                        log.warn("close {} fail", closeMeta, t);
+                      }
+                      if (closeMeta != null) {
+                        topicPartitionMap.get(topic).remove(closeMeta.getPartition());
+                      }
+                      return controlNodeCnx.openPartition(openMeta);
+                    })
+                .thenCompose(f -> f)
+                .thenAccept(
+                    r -> {
+                      topicPartitionMap.get(topic).put(openMeta.getPartition(), openMeta);
+                    })
+                .exceptionally(
+                    t -> {
+                      topicPartitionMap.get(topic).remove(openMeta.getPartition());
+                      return null;
+                    }));
+      }
     }
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
   }
 
   public void setNodeRegistry(NodeRegistry nodeRegistry) {
@@ -202,5 +231,9 @@ public class PartitionRegistryImpl implements PartitionRegistry {
 
   public void setKvStore(KVStore kvStore) {
     this.kvStore = kvStore;
+  }
+
+  public void setElection(LinkyElection election) {
+    this.election = election;
   }
 }

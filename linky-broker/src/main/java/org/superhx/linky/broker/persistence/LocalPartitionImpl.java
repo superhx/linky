@@ -18,6 +18,7 @@ package org.superhx.linky.broker.persistence;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
@@ -27,7 +28,6 @@ import java.util.NavigableMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** index format [physical offset 8bytes][size 4bytes] 不同的索引可以索引到同一消息，然后通过消息里面的offset做过滤 */
@@ -39,6 +39,8 @@ public class LocalPartitionImpl implements Partition {
   private volatile Segment lastSegment;
   private NavigableMap<Long, Segment> segmentStartOffsets = new ConcurrentSkipListMap<>();
   private LocalSegmentManager localSegmentManager;
+  private CompletableFuture lastSegmentFuture;
+  private long nextSegmentStartOffset;
 
   public LocalPartitionImpl(PartitionMeta meta) {
     this.meta = meta;
@@ -46,16 +48,71 @@ public class LocalPartitionImpl implements Partition {
 
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-    Segment segment = this.lastSegment;
-    return segment
-        .append(batchRecord)
+    return getLastSegment()
+        .thenCompose(
+            s -> {
+              switch (s.getStatus()) {
+                case WRITABLE:
+                  return s.append(batchRecord);
+                case REPLICA_LOSS:
+                case REPLICA_BREAK:
+                  return s.seal()
+                      .thenCompose(n -> nextSegment(s.getEndOffset()))
+                      .thenCompose(n -> n.append(batchRecord));
+              }
+              throw new LinkyIOException(String.format("Unknown status %s", s.getStatus()));
+            })
         .thenApply(appendResult -> new AppendResult(appendResult.getOffset()));
+  }
+
+  protected CompletableFuture<Segment> getLastSegment() {
+    if (lastSegmentFuture != null) {
+      return lastSegmentFuture;
+    }
+    synchronized (this) {
+      if (lastSegmentFuture != null) {
+        return lastSegmentFuture;
+      }
+      lastSegmentFuture = new CompletableFuture();
+      localSegmentManager
+          .nextSegment(
+              meta.getTopicId(),
+              meta.getPartition(),
+              segments.isEmpty() ? Segment.NO_INDEX : segments.get(segments.size() - 1).getIndex(),
+              nextSegmentStartOffset)
+          .thenAccept(
+              s -> {
+                lastSegmentFuture.complete(s);
+                this.lastSegment = s;
+                segmentStartOffsets.put(this.lastSegment.getStartOffset(), this.lastSegment);
+                segments.add(this.lastSegment);
+              });
+      return lastSegmentFuture;
+    }
+  }
+
+  protected CompletableFuture<Segment> nextSegment(long startOffset) {
+    lastSegmentFuture = new CompletableFuture();
+    localSegmentManager
+        .nextSegment(
+            meta.getTopicId(),
+            meta.getPartition(),
+            segments.isEmpty() ? Segment.NO_INDEX : segments.get(segments.size() - 1).getIndex(),
+            startOffset)
+        .thenAccept(
+            s -> {
+              lastSegmentFuture.complete(s);
+              this.lastSegment = s;
+              segmentStartOffsets.put(this.lastSegment.getStartOffset(), this.lastSegment);
+              segments.add(this.lastSegment);
+            });
+    return lastSegmentFuture;
   }
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
     // fast path
-    if (this.lastSegment.getStartOffset() <= offset) {
+    if (this.lastSegment != null && this.lastSegment.getStartOffset() <= offset) {
       Segment segment = this.lastSegment;
       return segment.get(offset);
     }
@@ -80,34 +137,20 @@ public class LocalPartitionImpl implements Partition {
         .thenCompose(
             s -> {
               segments = new CopyOnWriteArrayList<>(s);
-              System.out.println(segments);
               if (!segments.isEmpty()) {
                 return segments.get(segments.size() - 1).seal();
               }
               return CompletableFuture.completedFuture(null);
             })
-        .thenCompose(
-            r -> {
-              long endOffset = 0L;
+        .thenAccept(
+            n -> {
               for (int i = 0; i < segments.size(); i++) {
                 Segment segment = segments.get(i);
                 if (segment.getStartOffset() < segment.getEndOffset()) {
                   segmentStartOffsets.put(segment.getStartOffset(), segment);
-                  endOffset = segments.get(segments.size() - 1).getEndOffset();
+                  nextSegmentStartOffset = segments.get(segments.size() - 1).getEndOffset();
                 }
               }
-              return localSegmentManager.nextSegment(
-                  meta.getTopicId(),
-                  meta.getPartition(),
-                  segments.isEmpty()
-                      ? Segment.NO_INDEX
-                      : segments.get(segments.size() - 1).getIndex(),
-                  endOffset);
-            })
-        .thenAccept(
-            s -> {
-              this.lastSegment = s;
-              segmentStartOffsets.put(this.lastSegment.getStartOffset(), this.lastSegment);
               log.info("partition {} opened", meta);
             });
   }
@@ -118,6 +161,7 @@ public class LocalPartitionImpl implements Partition {
     log.info("partition {} closing...", meta);
     segments = null;
     if (lastSegment == null) {
+      log.info("partition {} closed", meta);
       return CompletableFuture.completedFuture(null);
     }
     return lastSegment
@@ -139,21 +183,5 @@ public class LocalPartitionImpl implements Partition {
     OPEN,
     SHUTTING,
     SHUTDOWN
-  }
-
-  public static void main(String... args) throws ExecutionException, InterruptedException {
-    CompletableFuture<Integer> f1 = new CompletableFuture<>();
-    f1.completeExceptionally(new RuntimeException());
-    CompletableFuture<Integer> f2 =
-        f1.thenCompose(
-            f -> {
-              System.out.println("here");
-              return CompletableFuture.completedFuture(2);
-            });
-    f2.thenAccept(
-            i -> {
-              System.out.println(i);
-            })
-        .get();
   }
 }

@@ -41,16 +41,19 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
 
   public CompletableFuture<CloseResponse> close(CloseRequest request) {
     PartitionMeta meta = request.getMeta();
-    long topicPartition = getTopicPartition(meta.getTopicId(), meta.getPartition());
+    long topicPartition = Utils.topicPartitionId(meta.getTopicId(), meta.getPartition());
     Partition partition = partitions.get(topicPartition);
     if (partition == null) {
       return CompletableFuture.completedFuture(
           CloseResponse.newBuilder().setStatus(CloseResponse.Status.SUCCESS).build());
     }
-    partition.close();
-    partitions.remove(topicPartition);
-    return CompletableFuture.completedFuture(
-        CloseResponse.newBuilder().setStatus(CloseResponse.Status.SUCCESS).build());
+    return partition
+        .close()
+        .thenApply(
+            n -> {
+              partitions.remove(topicPartition);
+              return CloseResponse.newBuilder().setStatus(CloseResponse.Status.SUCCESS).build();
+            });
   }
 
   public CompletableFuture<OpenResponse> open(OpenRequest request) {
@@ -77,10 +80,6 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
   public Partition getPartition(String topic, int partition) {
     TopicMeta meta = topicMetas.get(topic);
     return getPartition(meta.getId(), partition);
-  }
-
-  private static long getTopicPartition(int topic, int partition) {
-    return (((long) topic) << 32) & partition;
   }
 
   @Override

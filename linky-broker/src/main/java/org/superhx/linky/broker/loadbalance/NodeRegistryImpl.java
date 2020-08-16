@@ -26,19 +26,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class NodeRegistryImpl implements NodeRegistry {
-    private Map<String, Timestamped<NodeMeta>> nodeMap = new ConcurrentHashMap<>();
+  private Map<String, Timestamped<NodeMeta>> nodeMap = new ConcurrentHashMap<>();
+  private static final long TIMEOUT = 5_000;
 
-    @Override
-    public CompletableFuture<Void> register(NodeMeta node) {
-        nodeMap.put(node.getAddress(), new Timestamped<>(node));
-        return CompletableFuture.completedFuture(null);
-    }
+  @Override
+  public CompletableFuture<Void> register(NodeMeta node) {
+    nodeMap.put(node.getAddress(), new Timestamped<>(node));
+    return CompletableFuture.completedFuture(null);
+  }
 
-    @Override
-    public List<NodeMeta> getAliveNodes() {
-        List<NodeMeta> nodes = new ArrayList<>(nodeMap.size());
-        nodes.addAll(nodeMap.values().stream().map(n -> n.getData()).collect(Collectors.toList()));
-        return nodes;
-    }
-
+  @Override
+  public List<NodeMeta> getAliveNodes() {
+    List<NodeMeta> nodes = new ArrayList<>(nodeMap.size());
+    nodes.addAll(
+        nodeMap.values().stream()
+            .filter(t -> (System.currentTimeMillis() - t.getTimestamp()) < TIMEOUT)
+            .map(n -> n.getData())
+            .collect(Collectors.toList()));
+    return nodes;
+  }
 }

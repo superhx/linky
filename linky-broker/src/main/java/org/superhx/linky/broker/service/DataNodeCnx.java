@@ -20,6 +20,8 @@ import io.grpc.Channel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.LinkyIOException;
+import org.superhx.linky.broker.loadbalance.LinkyElection;
 import org.superhx.linky.broker.persistence.LocalSegmentManager;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceGrpc;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
@@ -37,7 +39,7 @@ public class DataNodeCnx {
   private LocalSegmentManager localSegmentManager;
   private BrokerContext brokerContext;
   private Map<String, Channel> channels = new ConcurrentHashMap<>();
-  private Channel controllerChannel = getChannel("127.0.0.1:9594");
+  private LinkyElection election;
 
   public DataNodeCnx() {}
 
@@ -56,6 +58,10 @@ public class DataNodeCnx {
             new StreamObserver<SegmentManagerServiceProto.CreateResponse>() {
               @Override
               public void onNext(SegmentManagerServiceProto.CreateResponse createResponse) {
+                if (createResponse.getStatus()
+                    == SegmentManagerServiceProto.CreateResponse.Status.FAIL) {
+                  result.completeExceptionally(new LinkyIOException("create segment fail"));
+                }
                 result.complete(null);
               }
 
@@ -104,6 +110,12 @@ public class DataNodeCnx {
             new StreamObserver<SegmentManagerServiceProto.SealResponse>() {
               @Override
               public void onNext(SegmentManagerServiceProto.SealResponse sealResponse) {
+                if (sealResponse
+                    .getStatus()
+                    .equals(SegmentManagerServiceProto.SealResponse.Status.FAIL)) {
+                  result.completeExceptionally(new LinkyIOException("SEAL_FAIL"));
+                  return;
+                }
                 result.complete(sealResponse.getEndOffset());
               }
 
@@ -159,10 +171,14 @@ public class DataNodeCnx {
   }
 
   private Channel getControllerChannel() {
-    return this.controllerChannel;
+    return getChannel(election.getLeader().getAddress());
   }
 
   public void setBrokerContext(BrokerContext brokerContext) {
     this.brokerContext = brokerContext;
+  }
+
+  public void setElection(LinkyElection election) {
+    this.election = election;
   }
 }

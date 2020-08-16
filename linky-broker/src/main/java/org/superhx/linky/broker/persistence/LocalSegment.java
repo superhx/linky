@@ -38,9 +38,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
+import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.REPLICA_BREAK;
+
 public class LocalSegment implements Segment {
   private static final Logger log = LoggerFactory.getLogger(LocalSegment.class);
-  private static final int FOLLOWER_MARK = 1 << 0;
   private static final int fileSize = 12 * 1024 * 1024;
   private static final int INDEX_UNIT_SIZE = 12;
   private SegmentMeta.Builder meta;
@@ -49,7 +50,7 @@ public class LocalSegment implements Segment {
   private int index;
   private long startOffset = NO_OFFSET;
   private AtomicLong nextOffset;
-  private Status status;
+  private Status status = Status.WRITABLE;
   private Role role;
   private List<StreamObserver<SegmentServiceProto.ReplicateRequest>> followerSenders =
       new ArrayList<>();
@@ -64,6 +65,7 @@ public class LocalSegment implements Segment {
   private DataNodeCnx dataNodeCnx;
   private String storePath;
   private MappedFiles mappedFiles;
+  private int replicaLossCount;
 
   public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext) {
     this.storePath =
@@ -142,6 +144,19 @@ public class LocalSegment implements Segment {
                                           @Override
                                           public void onError(Throwable throwable) {
                                             log.warn("replica segment fail", throwable);
+                                            replicaLossCount++;
+                                            status =
+                                                replicaLossCount
+                                                        < (meta.getReplicasList().size() + 1) / 2
+                                                    ? Status.REPLICA_LOSS
+                                                    : Status.REPLICA_BREAK;
+                                            if (status == Status.REPLICA_BREAK) {
+                                              checkWaiting();
+                                              for (Waiting waiting : waitConfirmRequests) {
+                                                waiting.future.complete(
+                                                    new AppendResult(REPLICA_BREAK, NO_OFFSET));
+                                              }
+                                            }
                                           }
 
                                           @Override
@@ -157,6 +172,9 @@ public class LocalSegment implements Segment {
     if (this.status == Status.READONLY) {
       rst.completeExceptionally(new StoreException());
       return rst;
+    }
+    if (this.status == Status.REPLICA_BREAK) {
+      return CompletableFuture.completedFuture(new AppendResult(REPLICA_BREAK, NO_OFFSET));
     }
     try {
       int recordsCount = batchRecord.getRecordsCount();
@@ -294,7 +312,7 @@ public class LocalSegment implements Segment {
   @Override
   public CompletableFuture<Void> seal0() {
     this.status = Status.READONLY;
-    log.info("start seal0 segment {}", meta);
+    log.info("start seal segment {}", meta);
     return CompletableFuture.allOf(
             waitConfirmRequests.stream()
                 .map(w -> w.future)
@@ -319,7 +337,7 @@ public class LocalSegment implements Segment {
               } catch (InvalidProtocolBufferException e) {
                 e.printStackTrace();
               }
-              log.info("complete seal0 segment {} endOffset {}", meta, this.endOffset);
+              log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
             });
   }
 
@@ -335,6 +353,11 @@ public class LocalSegment implements Segment {
         return;
       }
     }
+  }
+
+  @Override
+  public Status getStatus() {
+    return status;
   }
 
   @Override
@@ -374,10 +397,5 @@ public class LocalSegment implements Segment {
   enum Role {
     MAIN,
     FOLLOWER
-  }
-
-  enum Status {
-    WRITABLE,
-    READONLY
   }
 }

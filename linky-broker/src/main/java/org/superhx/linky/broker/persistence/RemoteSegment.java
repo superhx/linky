@@ -17,33 +17,31 @@
 package org.superhx.linky.broker.persistence;
 
 import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.service.DataNodeCnx;
+import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
 public class RemoteSegment implements Segment {
-  private static final int READONLY_MARK = 1 << 1;
-  private SegmentMeta meta;
-  private long endOffset;
-  private BrokerContext brokerContext;
+  private static final Logger log = LoggerFactory.getLogger(RemoteSegment.class);
+  private SegmentMeta.Builder meta;
   private DataNodeCnx dataNodeCnx;
+  private int addressIndex;
   private String address;
+  private Segment localSegment;
 
-  public RemoteSegment(SegmentMeta meta, BrokerContext brokerContext) {
-    this.meta = meta;
-    this.endOffset = meta.getEndOffset();
-    this.brokerContext = brokerContext;
+  public RemoteSegment(SegmentMeta meta, Segment localSegment, BrokerContext brokerContext) {
+    this.meta = meta.toBuilder();
     this.dataNodeCnx = brokerContext.getDataNodeCnx();
-
     this.address = meta.getReplicas(0).getAddress();
+    this.localSegment = localSegment;
+    log.info("open remote segment {}", meta);
   }
 
   @Override
@@ -58,9 +56,31 @@ public class RemoteSegment implements Segment {
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
+    if (this.localSegment != null) {
+      return this.localSegment.get(offset);
+    }
     CompletableFuture<BatchRecord> result = new CompletableFuture<>();
+    get0(offset)
+        .thenAccept(r -> result.complete(r))
+        .exceptionally(
+            t1 -> {
+              get0(offset)
+                  .thenAccept(r -> result.complete(r))
+                  .exceptionally(
+                      t2 -> {
+                        result.completeExceptionally(t2);
+                        return null;
+                      });
+              return null;
+            });
+    return result;
+  }
+
+  public CompletableFuture<BatchRecord> get0(long offset) {
+    CompletableFuture<BatchRecord> result = new CompletableFuture<>();
+    String aliveNode = getAliveNode();
     dataNodeCnx
-        .getSegmentServiceStub(address)
+        .getSegmentServiceStub(aliveNode)
         .get(
             SegmentServiceProto.GetRecordRequest.newBuilder()
                 .setTopicId(this.meta.getTopicId())
@@ -76,6 +96,7 @@ public class RemoteSegment implements Segment {
 
               @Override
               public void onError(Throwable throwable) {
+                markReqNodeFail(address);
                 result.completeExceptionally(throwable);
               }
 
@@ -83,6 +104,15 @@ public class RemoteSegment implements Segment {
               public void onCompleted() {}
             });
     return result;
+  }
+
+  protected String getAliveNode() {
+    return address;
+  }
+
+  protected void markReqNodeFail(String address) {
+    addressIndex++;
+    this.address = meta.getReplicas(addressIndex % meta.getReplicasList().size()).getAddress();
   }
 
   @Override
@@ -102,7 +132,7 @@ public class RemoteSegment implements Segment {
 
   @Override
   public long getEndOffset() {
-    return this.endOffset;
+    return this.meta.getEndOffset();
   }
 
   @Override
@@ -112,54 +142,26 @@ public class RemoteSegment implements Segment {
 
   @Override
   public SegmentMeta getMeta() {
-    return null;
+    return meta.build();
   }
 
   @Override
   public CompletableFuture<Void> seal() {
-    return null;
+    if ((meta.getFlag() & SEAL_MARK) != 0) {
+      return CompletableFuture.completedFuture(null);
+    }
+    return dataNodeCnx
+        .seal(
+            SegmentManagerServiceProto.SealRequest.newBuilder()
+                .setTopicId(meta.getTopicId())
+                .setPartition(meta.getPartition())
+                .setIndex(meta.getIndex())
+                .build())
+        .thenAccept(o -> meta.setEndOffset(o));
   }
 
   @Override
   public CompletableFuture<Void> seal0() {
-    if ((meta.getFlag() & READONLY_MARK) != 0) {
-      return CompletableFuture.completedFuture(null);
-    }
-    List<Long> endOffsets = new LinkedList<>();
-    return CompletableFuture.allOf(
-            meta.getReplicasList().stream()
-                .map(
-                    r -> {
-                      CompletableFuture<Void> rst = new CompletableFuture<>();
-                      dataNodeCnx
-                          .getSegmentServiceStub(r.getAddress())
-                          .seal(
-                              SegmentServiceProto.SealRequest.newBuilder().build(),
-                              new StreamObserver<SegmentServiceProto.SealResponse>() {
-                                @Override
-                                public void onNext(SegmentServiceProto.SealResponse sealResponse) {
-                                  endOffsets.add(sealResponse.getEndOffset());
-                                }
-
-                                @Override
-                                public void onError(Throwable throwable) {
-                                  endOffsets.add(NO_OFFSET);
-                                }
-
-                                @Override
-                                public void onCompleted() {
-                                  rst.complete(null);
-                                }
-                              });
-                      return rst;
-                    })
-                .collect(Collectors.toList())
-                .toArray(new CompletableFuture[0]))
-        .thenApply(
-            r -> {
-              Collections.sort(endOffsets);
-              this.endOffset = endOffsets.get(endOffsets.size() / 2) + 1;
-              return null;
-            });
+    return CompletableFuture.completedFuture(null);
   }
 }

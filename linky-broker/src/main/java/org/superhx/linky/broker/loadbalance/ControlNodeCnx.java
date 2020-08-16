@@ -39,6 +39,9 @@ public class ControlNodeCnx {
   private Map<String, Channel> channels = new ConcurrentHashMap<>();
 
   public CompletableFuture<Void> closePartition(PartitionMeta partitionMeta) {
+    if (partitionMeta == null) {
+      return CompletableFuture.completedFuture(null);
+    }
     if (Strings.isNullOrEmpty(partitionMeta.getAddress())) {
       CompletableFuture.completedFuture(null);
     }
@@ -55,6 +58,7 @@ public class ControlNodeCnx {
 
               @Override
               public void onError(Throwable throwable) {
+                log.warn("close partition {} fail", partitionMeta, throwable);
                 future.completeExceptionally(throwable);
               }
 
@@ -65,6 +69,9 @@ public class ControlNodeCnx {
   }
 
   public CompletableFuture<Void> openPartition(PartitionMeta partitionMeta) {
+    if (partitionMeta == null) {
+      return CompletableFuture.completedFuture(null);
+    }
     if (Strings.isNullOrEmpty(partitionMeta.getAddress())) {
       CompletableFuture.completedFuture(null);
     }

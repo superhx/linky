@@ -75,6 +75,7 @@ public class LinkyBrokerStartup {
     SegmentRegistryImpl segmentRegistry = new SegmentRegistryImpl();
     ControllerService controllerService = new ControllerService();
 
+    LinkyElection election = new LinkyElection(brokerContext);
     ((PartitionRegistryImpl) partitionRegistry).setControlNodeCnx(controlNodeCnx);
     ((PartitionRegistryImpl) partitionRegistry).setNodeRegistry(nodeRegistry);
     ((PartitionRegistryImpl) partitionRegistry).setSegmentRegistry(segmentRegistry);
@@ -83,8 +84,13 @@ public class LinkyBrokerStartup {
     segmentRegistry.setNodeRegistry(nodeRegistry);
     segmentRegistry.setBrokerContext(brokerContext);
     segmentRegistry.setKvStore(kvStore);
+    segmentRegistry.setPartitionRegistry(partitionRegistry);
+    segmentRegistry.setElection(election);
+    election.registerListener(segmentRegistry);
     controllerService.setNodeRegistry(nodeRegistry);
     controllerService.setSegmentRegistry(segmentRegistry);
+    ((PartitionRegistryImpl) partitionRegistry).setElection(election);
+    dataNodeCnx.setElection(election);
 
     segmentRegistry.init();
 
@@ -110,7 +116,7 @@ public class LinkyBrokerStartup {
         TimeUnit.MILLISECONDS);
 
     partitionRegistry.start();
-    partitionRegistry.createTopic("FOO", 1, 1);
+    partitionRegistry.createTopic("FOO", 1, 3);
   }
 
   public void start() throws IOException, InterruptedException {

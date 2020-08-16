@@ -16,39 +16,48 @@
  */
 package org.superhx.linky.broker.loadbalance;
 
-import com.google.protobuf.InvalidProtocolBufferException;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
+import org.superhx.linky.broker.persistence.Segment;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceGrpc;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
+import org.superhx.linky.service.proto.TopicMeta;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.NO_OFFSET;
 
 public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManagerServiceImplBase
-    implements SegmentRegistry {
+    implements SegmentRegistry, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(SegmentRegistryImpl.class);
-  private Map<SegmentKey, SegmentMeta.Builder> segments = new ConcurrentHashMap<>();
+  private Map<SegmentKey, SegmentMeta.Builder> segments = null;
   private Map<Long, Map<SegmentReplicaKey, Timestamped<SegmentMeta>>> aliveSegments =
       new ConcurrentHashMap<>();
 
   private ControlNodeCnx controlNodeCnx;
   private NodeRegistry nodeRegistry;
   private BrokerContext brokerContext;
+  private PartitionRegistry partitionRegistry;
   private KVStore kvStore;
+  private LinkyElection election;
+  private boolean isLeader;
 
   public void init() {
+    this.segments = loadSegments();
+  }
+
+  private Map<SegmentKey, SegmentMeta.Builder> loadSegments() {
+    Map<SegmentKey, SegmentMeta.Builder> segments = new ConcurrentHashMap<>();
     try {
       kvStore
           .get("segments/")
@@ -57,28 +66,26 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                 r.getKvs().stream()
                     .forEach(
                         m -> {
-                          try {
-                            SegmentMeta meta = SegmentMeta.parseFrom(m.getValue().getBytes());
-                            segments.put(
-                                new SegmentKey(
-                                    meta.getTopicId(), meta.getPartition(), meta.getIndex()),
-                                meta.toBuilder());
-                            log.info("load segment config {}", meta);
-                          } catch (InvalidProtocolBufferException e) {
-                            e.printStackTrace();
-                          }
+                          SegmentMeta.Builder builder = SegmentMeta.newBuilder();
+                          Utils.jsonBytes2pb(m.getValue().getBytes(), builder);
+                          SegmentMeta meta = builder.build();
+                          segments.put(
+                              new SegmentKey(
+                                  meta.getTopicId(), meta.getPartition(), meta.getIndex()),
+                              meta.toBuilder());
+                          log.info("load segment config {}", meta);
                         });
               })
           .get();
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    } catch (ExecutionException e) {
+    } catch (Exception e) {
       e.printStackTrace();
     }
+    return segments;
   }
 
   @Override
   public void register(SegmentMeta segment) {
+    checkLeadership();
     long topicPartitionId = Utils.topicPartitionId(segment.getTopicId(), segment.getPartition());
     Map<SegmentReplicaKey, Timestamped<SegmentMeta>> segments = aliveSegments.get(topicPartitionId);
     if (segments == null) {
@@ -101,7 +108,9 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   public void create(
       SegmentManagerServiceProto.CreateRequest request,
       StreamObserver<SegmentManagerServiceProto.CreateResponse> responseObserver) {
-    int replicaNum = 1;
+    checkLeadership();
+    TopicMeta topicMeta = partitionRegistry.getTopicMeta(request.getTopicId());
+    int replicaNum = topicMeta.getReplicaNum();
     List<String> replicas = new ArrayList<>(replicaNum);
     replicas.add(request.getAddress());
     for (NodeMeta node : nodeRegistry.getAliveNodes()) {
@@ -111,6 +120,19 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
       if (replicas.size() < replicaNum) {
         replicas.add(node.getAddress());
       }
+    }
+    if (replicas.size() < replicaNum) {
+      log.warn(
+          "[NO_ENOUGH_REPLICA] create segment {}-{}-{} fail",
+          request.getTopicId(),
+          request.getPartition(),
+          request.getLastIndex() + 1);
+      responseObserver.onNext(
+          SegmentManagerServiceProto.CreateResponse.newBuilder()
+              .setStatus(SegmentManagerServiceProto.CreateResponse.Status.FAIL)
+              .build());
+      responseObserver.onCompleted();
+      return;
     }
     SegmentMeta.Builder builder =
         SegmentMeta.newBuilder()
@@ -133,7 +155,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                   "segments/"
                       + Utils.getSegmentHex(
                           request.getTopicId(), request.getPartition(), request.getLastIndex() + 1),
-                  builder.clone().build().toByteArray());
+                  Utils.pb2jsonBytes(builder.clone()));
               this.segments.put(
                   new SegmentKey(
                       request.getTopicId(), request.getPartition(), request.getLastIndex() + 1),
@@ -146,7 +168,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
             })
         .exceptionally(
             t -> {
-              System.out.println("here");
               responseObserver.onError(t);
               return null;
             });
@@ -156,6 +177,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   public void getSegments(
       SegmentManagerServiceProto.GetSegmentsRequest request,
       StreamObserver<SegmentManagerServiceProto.GetSegmentsResponse> responseObserver) {
+    checkLeadership();
     List<SegmentMeta> metas = new ArrayList<>();
     this.segments.forEach(
         (k, v) -> {
@@ -174,9 +196,18 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   public void seal(
       SegmentManagerServiceProto.SealRequest request,
       StreamObserver<SegmentManagerServiceProto.SealResponse> responseObserver) {
+    checkLeadership();
     SegmentMeta.Builder meta =
         this.segments.get(
             new SegmentKey(request.getTopicId(), request.getPartition(), request.getIndex()));
+    if ((meta.getFlag() & Segment.SEAL_MARK) != 0) {
+      responseObserver.onNext(
+          SegmentManagerServiceProto.SealResponse.newBuilder()
+              .setEndOffset(meta.getEndOffset())
+              .build());
+      responseObserver.onCompleted();
+      return;
+    }
     List<Long> endOffsets = new LinkedList<>();
     CompletableFuture.allOf(
             meta.getReplicasList().stream()
@@ -199,7 +230,15 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
 
                                 @Override
                                 public void onError(Throwable throwable) {
+                                  log.warn(
+                                      "[SEALFAIL] seal {}-{}-{} in {} fail",
+                                      request.getTopicId(),
+                                      request.getPartition(),
+                                      request.getIndex(),
+                                      r.getAddress(),
+                                      throwable);
                                   endOffsets.add(NO_OFFSET);
+                                  rst.complete(null);
                                 }
 
                                 @Override
@@ -214,13 +253,21 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
         .thenAccept(
             r -> {
               Collections.sort(endOffsets);
-              long endOffset = endOffsets.get(endOffsets.size() / 2) + 1;
+              long endOffset = endOffsets.get(endOffsets.size() / 2);
+              if (endOffset == NO_OFFSET) {
+                log.warn("[SEAL_FAIL] no enough replica");
+                responseObserver.onNext(
+                    SegmentManagerServiceProto.SealResponse.newBuilder()
+                        .setStatus(SegmentManagerServiceProto.SealResponse.Status.FAIL)
+                        .build());
+              }
               meta.setEndOffset(endOffset);
+              meta.setFlag(meta.getFlag() & Segment.SEAL_MARK);
               kvStore.put(
                   "segments/"
                       + Utils.getSegmentHex(
                           request.getTopicId(), request.getPartition(), request.getIndex()),
-                  meta.clone().build().toByteArray());
+                  Utils.pb2jsonBytes(meta.clone()));
               responseObserver.onNext(
                   SegmentManagerServiceProto.SealResponse.newBuilder()
                       .setEndOffset(endOffset)
@@ -249,5 +296,29 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
 
   public void setKvStore(KVStore kvStore) {
     this.kvStore = kvStore;
+  }
+
+  public void setPartitionRegistry(PartitionRegistry partitionRegistry) {
+    this.partitionRegistry = partitionRegistry;
+  }
+
+  public void setElection(LinkyElection election) {
+    this.election = election;
+  }
+
+  @Override
+  public synchronized void onChanged(LinkyElection.Leader leader) {
+    if (election.isLeader()) {
+      init();
+      isLeader = true;
+    } else {
+      isLeader = false;
+    }
+  }
+
+  private void checkLeadership() {
+    if (!isLeader) {
+      throw new LinkyIOException("NOT LEADER");
+    }
   }
 }

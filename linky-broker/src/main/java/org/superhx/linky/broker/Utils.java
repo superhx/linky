@@ -17,6 +17,9 @@
 package org.superhx.linky.broker;
 
 import com.google.common.io.Files;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.MessageOrBuilder;
+import com.google.protobuf.util.JsonFormat;
 
 import java.io.File;
 import java.io.IOException;
@@ -71,6 +74,22 @@ public class Utils {
       hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
     }
     return new String(hexChars);
+  }
+
+  public static byte[] pb2jsonBytes(MessageOrBuilder builder) {
+    try {
+      return JsonFormat.printer().print(builder).getBytes(DEFAULT_CHARSET);
+    } catch (InvalidProtocolBufferException e) {
+      throw new LinkyIOException(e);
+    }
+  }
+
+  public static void jsonBytes2pb(byte[] json, com.google.protobuf.Message.Builder builder) {
+    try {
+      JsonFormat.parser().merge(new String(json, DEFAULT_CHARSET), builder);
+    } catch (InvalidProtocolBufferException e) {
+      throw new LinkyIOException(e);
+    }
   }
 
   public static String getSegmentHex(int topicId, int partition, int index) {

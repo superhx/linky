@@ -32,7 +32,6 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
   public void get(
       SegmentServiceProto.GetRecordRequest request,
       StreamObserver<SegmentServiceProto.GetRecordResponse> responseObserver) {
-    super.get(request, responseObserver);
     Segment segment =
         localSegmentManager.getSegment(
             request.getTopicId(), request.getPartition(), request.getIndex());
