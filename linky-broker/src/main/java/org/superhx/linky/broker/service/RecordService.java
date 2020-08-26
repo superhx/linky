@@ -22,8 +22,6 @@ import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.persistence.Partition;
 import org.superhx.linky.service.proto.*;
 
-import java.util.concurrent.CompletableFuture;
-
 public class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
   private static final Logger log = LoggerFactory.getLogger(RecordService.class);
   private PartitionService partitionService;
@@ -72,26 +70,5 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
 
   public void setPartitionService(PartitionService partitionService) {
     this.partitionService = partitionService;
-  }
-
-  public static void main(String... args) {
-    CompletableFuture c = new CompletableFuture();
-    c.exceptionally(
-            t -> {
-              System.out.println("t " + t);
-
-              return "hh";
-            })
-        .thenAccept(
-            f -> {
-              System.out.println("f " + f);
-            })
-        .exceptionally(
-            e -> {
-              System.out.println("e " + e);
-              return null;
-            });
-
-    c.completeExceptionally(new RuntimeException());
   }
 }

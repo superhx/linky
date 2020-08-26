@@ -103,20 +103,22 @@ public class LinkyBrokerStartup {
             .addService(segmentRegistry)
             .build();
 
+    partitionRegistry.start();
+    partitionRegistry.createTopic("FOO", 1, 3);
+
     schedule.scheduleWithFixedDelay(
         () -> {
+          localSegmentManager.getLocalSegments();
           ControllerServiceProto.HeartbeatRequest heartbeatRequest =
               ControllerServiceProto.HeartbeatRequest.newBuilder()
                   .setAddress(brokerContext.getAddress())
+                  .addAllSegments(localSegmentManager.getLocalSegments())
                   .build();
           dataNodeCnx.keepalive(heartbeatRequest);
         },
         1000,
         1000,
         TimeUnit.MILLISECONDS);
-
-    partitionRegistry.start();
-    partitionRegistry.createTopic("FOO", 1, 3);
   }
 
   public void start() throws IOException, InterruptedException {

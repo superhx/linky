@@ -47,11 +47,6 @@ public class LocalPartitionImpl implements Partition {
     this.meta = meta;
   }
 
-  class FlushTask implements Runnable {
-    @Override
-    public void run() {}
-  }
-
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
     return getLastSegment()
