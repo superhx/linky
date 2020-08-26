@@ -31,10 +31,13 @@ import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.Collections;
+import java.util.List;
+import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -53,10 +56,10 @@ public class LocalSegment implements Segment {
   private AtomicLong nextOffset;
   private Status status = Status.WRITABLE;
   private Role role;
-  private List<StreamObserver<SegmentServiceProto.ReplicateRequest>> followerSenders =
-      new ArrayList<>();
-  private Map<String, AtomicLong> confirmOffsets = new ConcurrentHashMap<>();
+  private List<Follower> followers = new CopyOnWriteArrayList<>();
+
   private volatile long confirmOffset = NO_OFFSET;
+
   private Queue<Waiting> waitConfirmRequests = new ConcurrentLinkedQueue<>();
 
   private long endOffset = NO_OFFSET;
@@ -121,48 +124,12 @@ public class LocalSegment implements Segment {
                 if (brokerContext.getAddress().equals(r.getAddress())) {
                   return;
                 }
-                AtomicLong followerConfirmOffset = new AtomicLong(NO_OFFSET);
-                confirmOffsets.put(r.getAddress(), followerConfirmOffset);
                 Context.current()
                     .fork()
                     .run(
-                        () ->
-                            followerSenders.add(
-                                this.dataNodeCnx
-                                    .getSegmentServiceStub(r.getAddress())
-                                    .replicate(
-                                        new StreamObserver<
-                                            SegmentServiceProto.ReplicateResponse>() {
-                                          @Override
-                                          public void onNext(
-                                              SegmentServiceProto.ReplicateResponse
-                                                  replicateResponse) {
-                                            followerConfirmOffset.set(
-                                                replicateResponse.getConfirmOffset());
-                                            checkWaiting();
-                                          }
-
-                                          @Override
-                                          public void onError(Throwable throwable) {
-                                            log.warn("replica segment {} fail", r.getAddress());
-                                            failedReplicas.add(r.getAddress());
-                                            status =
-                                                failedReplicas.size()
-                                                        < (meta.getReplicasList().size() + 1) / 2
-                                                    ? Status.REPLICA_LOSS
-                                                    : Status.REPLICA_BREAK;
-                                            if (status == Status.REPLICA_BREAK) {
-                                              checkWaiting();
-                                              for (Waiting waiting : waitConfirmRequests) {
-                                                waiting.future.complete(
-                                                    new AppendResult(REPLICA_BREAK, NO_OFFSET));
-                                              }
-                                            }
-                                          }
-
-                                          @Override
-                                          public void onCompleted() {}
-                                        })));
+                        () -> {
+                          followers.add(new Follower(r.getAddress(), meta.getStartOffset()));
+                        });
               });
     }
   }
@@ -180,7 +147,12 @@ public class LocalSegment implements Segment {
     try {
       int recordsCount = batchRecord.getRecordsCount();
       long offset = nextOffset.getAndAdd(recordsCount);
-      batchRecord = BatchRecord.newBuilder(batchRecord).setFirstOffset(offset).build();
+      batchRecord =
+          BatchRecord.newBuilder(batchRecord)
+              .setTopicId(meta.getTopicId())
+              .setFirstOffset(offset)
+              .setSegmentIndex(index)
+              .build();
 
       CompletableFuture<WriteAheadLog.AppendResult> walFuture = wal.append(batchRecord);
       waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(offset)));
@@ -197,14 +169,9 @@ public class LocalSegment implements Segment {
           });
 
       SegmentServiceProto.ReplicateRequest replicateRequest =
-          SegmentServiceProto.ReplicateRequest.newBuilder()
-              .setTopicId(topic)
-              .setPartition(partition)
-              .setIndex(index)
-              .setBatchRecord(batchRecord)
-              .build();
-      for (StreamObserver<SegmentServiceProto.ReplicateRequest> follower : followerSenders) {
-        follower.onNext(replicateRequest);
+          SegmentServiceProto.ReplicateRequest.newBuilder().setBatchRecord(batchRecord).build();
+      for (Follower follower : followers) {
+        follower.replicate(replicateRequest);
       }
 
       return rst;
@@ -322,7 +289,7 @@ public class LocalSegment implements Segment {
         .thenAccept(
             r -> {
               List<Long> offsets =
-                  confirmOffsets.values().stream().map(o -> o.get()).collect(Collectors.toList());
+                  followers.stream().map(f -> f.getConfirmOffset()).collect(Collectors.toList());
               offsets.add(confirmOffset);
               Collections.sort(offsets);
               this.endOffset = offsets.get(offsets.size() / 2) + 1;
@@ -382,13 +349,15 @@ public class LocalSegment implements Segment {
       if (confirmOffset >= this.offset) {
         confirmCount++;
       }
-      for (AtomicLong confirmOffset : confirmOffsets.values()) {
-        if (confirmOffset.get() >= this.offset) {
-          confirmCount++;
+      if (role == Role.MAIN) {
+        for (Follower follower : followers) {
+          if (follower.getConfirmOffset() >= this.offset) {
+            confirmCount++;
+          }
         }
-      }
-      if (confirmCount <= (confirmOffsets.size() + 1) / 2) {
-        return false;
+        if (confirmCount <= (meta.getReplicaNum() + 1) / 2) {
+          return false;
+        }
       }
       future.complete(result);
       return true;
@@ -398,5 +367,56 @@ public class LocalSegment implements Segment {
   enum Role {
     MAIN,
     FOLLOWER
+  }
+
+  class Follower {
+    private long expectedNextOffset;
+    private long confirmOffset = NO_OFFSET;
+    private StreamObserver<SegmentServiceProto.ReplicateRequest> follower;
+
+    public Follower(String follower, long startOffset) {
+      this.expectedNextOffset = startOffset;
+      this.follower =
+          dataNodeCnx
+              .getSegmentServiceStub(follower)
+              .replicate(
+                  new StreamObserver<SegmentServiceProto.ReplicateResponse>() {
+                    @Override
+                    public void onNext(SegmentServiceProto.ReplicateResponse replicateResponse) {
+                      confirmOffset = replicateResponse.getConfirmOffset();
+                      checkWaiting();
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                      log.warn("replica segment {} fail", follower);
+                      failedReplicas.add(follower);
+                      status =
+                          failedReplicas.size() < (meta.getReplicasList().size() + 1) / 2
+                              ? Status.REPLICA_LOSS
+                              : Status.REPLICA_BREAK;
+                      if (status == Status.REPLICA_BREAK) {
+                        checkWaiting();
+                        for (Waiting waiting : waitConfirmRequests) {
+                          waiting.future.complete(new AppendResult(REPLICA_BREAK, NO_OFFSET));
+                        }
+                      }
+                    }
+
+                    @Override
+                    public void onCompleted() {}
+                  });
+    }
+
+    public void replicate(SegmentServiceProto.ReplicateRequest request) {
+//      if (expectedNextOffset != request.getBatchRecord().getFirstOffset()) {
+//        return;
+//      }
+      follower.onNext(request);
+    }
+
+    public long getConfirmOffset() {
+      return confirmOffset;
+    }
   }
 }

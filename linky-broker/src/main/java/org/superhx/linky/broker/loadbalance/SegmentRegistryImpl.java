@@ -139,7 +139,8 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
             .setTopicId(request.getTopicId())
             .setPartition(request.getPartition())
             .setStartOffset(request.getStartOffset())
-            .setIndex(request.getLastIndex() + 1);
+            .setIndex(request.getLastIndex() + 1)
+            .setReplicaNum(replicaNum);
     for (String address : replicas) {
       int flag = address.equals(request.getAddress()) ? 0 : 1;
       builder.addReplicas(

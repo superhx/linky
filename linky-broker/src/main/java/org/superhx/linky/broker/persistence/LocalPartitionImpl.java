@@ -54,8 +54,8 @@ public class LocalPartitionImpl implements Partition {
             s -> {
               switch (s.getStatus()) {
                 case WRITABLE:
-                  return s.append(batchRecord);
                 case REPLICA_LOSS:
+                  return s.append(batchRecord);
                 case REPLICA_BREAK:
                   return nextSegment(s).thenCompose(n -> n.append(batchRecord));
               }

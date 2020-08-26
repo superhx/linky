@@ -39,9 +39,6 @@ message GetRecordResponse {
 }
 
 message ReplicateRequest {
-    int32 topicId = 1;
-    int32 partition = 2;
-    int32 index = 3;
     BatchRecord batchRecord = 4;
 }
 
