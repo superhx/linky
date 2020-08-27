@@ -121,7 +121,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
         replicas.add(node.getAddress());
       }
     }
-    if (replicas.size() < replicaNum) {
+    if (replicas.size() < replicaNum / 2 + 1) {
       log.warn(
           "[NO_ENOUGH_REPLICA] create segment {}-{}-{} fail",
           request.getTopicId(),

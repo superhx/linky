@@ -48,6 +48,7 @@ message ReplicateResponse {
     enum Status {
         SUCCESS = 0;
         FAIL = 1;
+        RESET = 2;
     }
     Status status = 1;
     int64 confirmOffset = 2;

@@ -50,11 +50,6 @@ public class RemoteSegment implements Segment {
   }
 
   @Override
-  public CompletableFuture<ReplicateResult> replicate(BatchRecord batchRecord) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public CompletableFuture<BatchRecord> get(long offset) {
     if (this.localSegment != null) {
       return this.localSegment.get(offset);

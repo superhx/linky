@@ -90,7 +90,8 @@ public class LocalSegmentManager {
 
   public CompletableFuture<Void> createSegment(SegmentMeta meta) {
     try {
-      String json = JsonFormat.printer().print(meta.toBuilder().clearReplicas());
+      //      String json = JsonFormat.printer().print(meta.toBuilder().clearReplicas());
+      String json = JsonFormat.printer().print(meta.toBuilder());
       Utils.str2file(
           json,
           Utils.getSegmentMetaPath(

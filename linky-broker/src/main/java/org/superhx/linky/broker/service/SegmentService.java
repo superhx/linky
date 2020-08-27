@@ -65,10 +65,7 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
             .replicate(replicateRequest.getBatchRecord())
             .thenAccept(
                 rst -> {
-                  responseObserver.onNext(
-                      SegmentServiceProto.ReplicateResponse.newBuilder()
-                          .setConfirmOffset(rst.getConfirmOffset())
-                          .build());
+                  responseObserver.onNext(rst);
                 });
       }
 

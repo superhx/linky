@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
@@ -31,9 +32,8 @@ public interface Segment {
 
   CompletableFuture<BatchRecord> get(long offset);
 
-  CompletableFuture<ReplicateResult> replicate(BatchRecord batchRecord);
-
-  default CompletableFuture<Void> copyTo(String address, long startOffset) {
+  default CompletableFuture<SegmentServiceProto.ReplicateResponse> replicate(
+      BatchRecord batchRecord) {
     throw new UnsupportedOperationException();
   }
 
@@ -104,27 +104,42 @@ public interface Segment {
       this.offset = offset;
     }
   }
-
-  class ReplicateResult {
-    enum Status {
-      SUCCESS,
-    }
-
-    private Status status = Status.SUCCESS;
-    private long confirmOffset;
-
-    public ReplicateResult(long confirmOffset) {
-      this.confirmOffset = confirmOffset;
-    }
-
-    public long getConfirmOffset() {
-      return confirmOffset;
-    }
-
-    public void setConfirmOffset(long confirmOffset) {
-      this.confirmOffset = confirmOffset;
-    }
-  }
+  //
+  //  class ReplicateResult {
+  //
+  //    public enum Status {
+  //      SUCCESS,
+  //      RESET
+  //    }
+  //
+  //    private Status status = Status.SUCCESS;
+  //    private long confirmOffset;
+  //
+  //    public ReplicateResult(long confirmOffset) {
+  //      this.confirmOffset = confirmOffset;
+  //    }
+  //
+  //    public ReplicateResult(ReplicateResult.Status status, long confirmOffset) {
+  //        this.status = status;
+  //        this.confirmOffset = confirmOffset;
+  //    }
+  //
+  //    public long getConfirmOffset() {
+  //      return confirmOffset;
+  //    }
+  //
+  //    public void setConfirmOffset(long confirmOffset) {
+  //      this.confirmOffset = confirmOffset;
+  //    }
+  //
+  //    public Status getStatus() {
+  //      return status;
+  //    }
+  //
+  //    public void setStatus(Status status) {
+  //      this.status = status;
+  //    }
+  //  }
 
   enum Status {
     WRITABLE,
