@@ -29,9 +29,13 @@ public interface Segment {
 
   CompletableFuture<AppendResult> append(BatchRecord batchRecord);
 
+  CompletableFuture<BatchRecord> get(long offset);
+
   CompletableFuture<ReplicateResult> replicate(BatchRecord batchRecord);
 
-  CompletableFuture<BatchRecord> get(long offset);
+  default CompletableFuture<Void> copyTo(String address, long startOffset) {
+    throw new UnsupportedOperationException();
+  }
 
   int getIndex();
 

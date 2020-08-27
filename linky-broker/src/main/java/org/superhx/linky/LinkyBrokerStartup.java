@@ -42,6 +42,8 @@ public class LinkyBrokerStartup {
   Server server;
 
   public LinkyBrokerStartup() {
+    long epoch = System.currentTimeMillis();
+
     String port = System.getProperty("port", "9594");
     BrokerContext brokerContext = new BrokerContext();
     brokerContext.setAddress("127.0.0.1:" + port);
@@ -112,6 +114,7 @@ public class LinkyBrokerStartup {
           ControllerServiceProto.HeartbeatRequest heartbeatRequest =
               ControllerServiceProto.HeartbeatRequest.newBuilder()
                   .setAddress(brokerContext.getAddress())
+                  .setEpoch(epoch)
                   .addAllSegments(localSegmentManager.getLocalSegments())
                   .build();
           dataNodeCnx.keepalive(heartbeatRequest);

@@ -131,6 +131,8 @@ public class LocalSegment implements Segment {
                           followers.add(new Follower(r.getAddress(), meta.getStartOffset()));
                         });
               });
+    } else if ((this.meta.getFlag() & SEAL_MARK) == 0) {
+
     }
   }
 
@@ -224,6 +226,13 @@ public class LocalSegment implements Segment {
   }
 
   @Override
+  public CompletableFuture<Void> copyTo(String address, long startOffset) {
+    Follower follower = new Follower(address, startOffset);
+
+    return null;
+  }
+
+  @Override
   public int getIndex() {
     return index;
   }
@@ -294,6 +303,7 @@ public class LocalSegment implements Segment {
               Collections.sort(offsets);
               this.endOffset = offsets.get(offsets.size() / 2) + 1;
               this.meta.setEndOffset(endOffset);
+              this.meta.setFlag(this.meta.getFlag() & SEAL_MARK);
               try {
                 Utils.str2file(
                     JsonFormat.printer().print(this.meta),
@@ -409,10 +419,11 @@ public class LocalSegment implements Segment {
     }
 
     public void replicate(SegmentServiceProto.ReplicateRequest request) {
-//      if (expectedNextOffset != request.getBatchRecord().getFirstOffset()) {
-//        return;
-//      }
+      if (expectedNextOffset != request.getBatchRecord().getFirstOffset()) {
+        return;
+      }
       follower.onNext(request);
+      expectedNextOffset += request.getBatchRecord().getRecordsCount();
     }
 
     public long getConfirmOffset() {

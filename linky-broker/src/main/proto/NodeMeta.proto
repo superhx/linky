@@ -10,4 +10,5 @@ option java_outer_classname = "NodeMetaProto";
 
 message NodeMeta {
     string address = 1;
+    int64 epoch = 2;
 }

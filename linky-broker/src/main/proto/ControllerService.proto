@@ -13,7 +13,7 @@ service ControllerService {
 }
 
 message HeartbeatRequest {
-    int32 epoch = 1;
+    int64 epoch = 1;
     string address = 2;
     repeated SegmentMeta segments = 3;
     message Wal {
@@ -23,5 +23,5 @@ message HeartbeatRequest {
 }
 
 message HeartbeatResponse {
-    int32 epoch = 1;
+    int64 epoch = 1;
 }

@@ -150,6 +150,7 @@ public class PartitionRegistryImpl implements PartitionRegistry {
                 .setTopic(topicIdMetaMap.get(topicMeta.getId()).getTopic())
                 .setPartition(i)
                 .setAddress(nodes.get(counter % nodes.size()).getAddress())
+                .setEpoch(nodes.get(counter % nodes.size()).getEpoch())
                 .build());
         counter++;
       }

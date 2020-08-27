@@ -131,6 +131,15 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
     super.copyFrom(request, responseObserver);
   }
 
+  @Override
+  public void copyTo(
+      SegmentServiceProto.CopyToRequest request,
+      StreamObserver<SegmentServiceProto.CopyToResponse> responseObserver) {
+    Segment segment =
+        this.localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+  }
+
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
   }

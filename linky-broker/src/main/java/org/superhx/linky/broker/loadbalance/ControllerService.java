@@ -31,7 +31,7 @@ public class ControllerService extends ControllerServiceGrpc.ControllerServiceIm
       ControllerServiceProto.HeartbeatRequest request,
       StreamObserver<ControllerServiceProto.HeartbeatResponse> responseObserver) {
     nodeRegistry
-        .register(NodeMeta.newBuilder().setAddress(request.getAddress()).build())
+        .register(NodeMeta.newBuilder().setAddress(request.getAddress()).setEpoch(request.getEpoch()).build())
         .thenAccept(
             r -> {
               responseObserver.onNext(

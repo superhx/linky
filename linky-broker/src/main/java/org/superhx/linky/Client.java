@@ -31,7 +31,7 @@ public class Client {
     static int count = 2;
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
-        ManagedChannelBuilder.forTarget("localhost:9591").usePlaintext().build();
+        ManagedChannelBuilder.forTarget("localhost:9592").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
     final AtomicLong maxOffset = new AtomicLong();
     for (int i = 0; i < count; i++) {

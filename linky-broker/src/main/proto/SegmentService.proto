@@ -20,6 +20,8 @@ service SegmentService {
     rpc seal(SealRequest) returns (SealResponse) {}
 
     rpc copyFrom(CopyFromRequest) returns (CopyFromResponse) {}
+
+    rpc copyTo(CopyToRequest) returns (CopyToResponse) {}
 }
 
 message GetRecordRequest {
@@ -80,4 +82,15 @@ message CopyFromRequest {
 }
 
 message CopyFromResponse {
+}
+
+message CopyToRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+    string address = 4;
+    int64 startOffset = 5;
+}
+
+message CopyToResponse {
 }
