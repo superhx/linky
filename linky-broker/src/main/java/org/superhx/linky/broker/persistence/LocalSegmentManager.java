@@ -73,6 +73,7 @@ public class LocalSegmentManager {
                     .read();
             SegmentMeta.Builder builder = SegmentMeta.newBuilder();
             JsonFormat.parser().merge(metaStr, builder);
+            builder.setFlag(builder.getFlag() | LocalSegment.SEAL_MARK);
             SegmentMeta segmentMeta = builder.build();
             log.info("load local segment {}", segmentMeta);
             segments.put(

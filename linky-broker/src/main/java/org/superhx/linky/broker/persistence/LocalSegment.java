@@ -66,6 +66,7 @@ public class LocalSegment implements Segment {
   private String storePath;
   private MappedFiles mappedFiles;
   private Set<String> failedReplicas = new CopyOnWriteArraySet<>();
+  boolean sinking = false;
 
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
@@ -117,6 +118,9 @@ public class LocalSegment implements Segment {
 
     scheduler.scheduleWithFixedDelay(
         () -> {
+            if ((meta.getFlag() & SEAL_MARK) != 0) {
+              return;
+            }
           for (Follower follower : followers) {
             if (!follower.isBroken()) {
               continue;
@@ -198,12 +202,13 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<SegmentServiceProto.ReplicateResponse> replicate(
-      BatchRecord batchRecord) {
+      SegmentServiceProto.ReplicateRequest request) {
     CompletableFuture<SegmentServiceProto.ReplicateResponse> rst = new CompletableFuture<>();
     if (this.status == Status.READONLY) {
       rst.completeExceptionally(new StoreException());
       return rst;
     }
+    BatchRecord batchRecord = request.getBatchRecord();
     log.info("replica {}", batchRecord);
 
     if (nextOffset.get() != batchRecord.getFirstOffset()) {
@@ -254,6 +259,97 @@ public class LocalSegment implements Segment {
   }
 
   @Override
+  public synchronized void syncCmd(
+      SegmentServiceProto.SyncCmdRequest request,
+      StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
+    if (sinking == true) {
+      responseObserver.onNext(SegmentServiceProto.SyncCmdResponse.newBuilder().build());
+      responseObserver.onCompleted();
+      return;
+    }
+    sinking = true;
+    this.status = Status.READONLY;
+    this.meta.setFlag(this.meta.getFlag() & SEAL_MARK);
+    dataNodeCnx
+        .getSegmentServiceStub(request.getAddress())
+        .sync(
+            SegmentServiceProto.SyncRequest.newBuilder()
+                .setTopicId(topic)
+                .setPartition(partition)
+                .setIndex(index)
+                .setStartOffset(this.confirmOffset + 1)
+                .build(),
+            new StreamObserver<SegmentServiceProto.SyncResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.SyncResponse syncResponse) {
+                BatchRecord batchRecord = syncResponse.getBatchRecord();
+                if (nextOffset.get() != batchRecord.getFirstOffset()) {
+                  log.info("sync sink not equal {}", batchRecord);
+                  return;
+                }
+                log.info("sync sink {}", batchRecord);
+                nextOffset.addAndGet(batchRecord.getRecordsCount());
+                long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount()) - 1;
+                wal.append(batchRecord)
+                    .thenAccept(
+                        r -> {
+                          LocalSegment.this.confirmOffset = replicaConfirmOffset;
+                          ByteBuffer index = ByteBuffer.allocate(12);
+                          index.putLong(r.getOffset());
+                          index.putInt(r.getSize());
+                          index.flip();
+                          mappedFiles.write(index);
+                        });
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                log.info("sink fail", throwable);
+                sinking = false;
+                responseObserver.onError(throwable);
+              }
+
+              @Override
+              public void onCompleted() {
+                sinking = false;
+                responseObserver.onNext(SegmentServiceProto.SyncCmdResponse.newBuilder().build());
+                responseObserver.onCompleted();
+              }
+            });
+  }
+
+  @Override
+  public void sync(
+      SegmentServiceProto.SyncRequest request,
+      StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
+    CompletableFuture<Void> lastReplicator = CompletableFuture.completedFuture(null);
+    for (long offset = request.getStartOffset();
+        offset <= LocalSegment.this.confirmOffset;
+        offset++) {
+      long finalOffset = offset;
+      lastReplicator =
+          lastReplicator.thenAccept(
+              n ->
+                  get(finalOffset)
+                      .thenAccept(
+                          r ->
+                              responseObserver.onNext(
+                                  SegmentServiceProto.SyncResponse.newBuilder()
+                                      .setBatchRecord(r)
+                                      .build())));
+    }
+    lastReplicator
+        .thenAccept(n -> {
+          responseObserver.onCompleted();
+        })
+        .exceptionally(
+            t -> {
+              responseObserver.onError(t);
+              return null;
+            });
+  }
+
+  @Override
   public int getIndex() {
     return index;
   }
@@ -297,18 +393,23 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<Void> seal() {
-    return dataNodeCnx
-        .seal(
-            SegmentManagerServiceProto.SealRequest.newBuilder()
-                .setTopicId(topic)
-                .setPartition(partition)
-                .setIndex(index)
-                .build())
-        .thenAccept(o -> {});
+    return seal0()
+        .thenCompose(
+            n ->
+                dataNodeCnx.seal(
+                    SegmentManagerServiceProto.SealRequest.newBuilder()
+                        .setTopicId(topic)
+                        .setPartition(partition)
+                        .setIndex(index)
+                        .build()))
+        .thenAccept(l -> {});
   }
 
   @Override
-  public CompletableFuture<Void> seal0() {
+  public synchronized CompletableFuture<Void> seal0() {
+    if (this.status == Status.READONLY) {
+      return CompletableFuture.completedFuture(null);
+    }
     this.status = Status.READONLY;
     log.info("start seal segment {}", meta);
     return CompletableFuture.allOf(

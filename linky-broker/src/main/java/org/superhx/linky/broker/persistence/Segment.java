@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import io.grpc.stub.StreamObserver;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
@@ -33,7 +34,17 @@ public interface Segment {
   CompletableFuture<BatchRecord> get(long offset);
 
   default CompletableFuture<SegmentServiceProto.ReplicateResponse> replicate(
-      BatchRecord batchRecord) {
+      SegmentServiceProto.ReplicateRequest request) {
+    throw new UnsupportedOperationException();
+  }
+
+  default void syncCmd(SegmentServiceProto.SyncCmdRequest request, StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
+      throw new UnsupportedOperationException();
+  }
+
+  default void sync(
+      SegmentServiceProto.SyncRequest request,
+      StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
     throw new UnsupportedOperationException();
   }
 

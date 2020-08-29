@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Client {
-    static int count = 1;
+    static int count = 2;
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
         ManagedChannelBuilder.forTarget("localhost:9592").usePlaintext().build();

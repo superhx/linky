@@ -25,6 +25,7 @@ import org.superhx.linky.data.service.proto.SegmentServiceProto;
 public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
 
   private LocalSegmentManager localSegmentManager;
+  private DataNodeCnx dataNodeCnx;
 
   public SegmentService() {}
 
@@ -62,7 +63,7 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
                 replicateRequest.getBatchRecord().getPartition(),
                 replicateRequest.getBatchRecord().getSegmentIndex());
         segment
-            .replicate(replicateRequest.getBatchRecord())
+            .replicate(replicateRequest)
             .thenAccept(
                 rst -> {
                   responseObserver.onNext(rst);
@@ -122,22 +123,30 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
   }
 
   @Override
-  public void copyFrom(
-      SegmentServiceProto.CopyFromRequest request,
-      StreamObserver<SegmentServiceProto.CopyFromResponse> responseObserver) {
-    super.copyFrom(request, responseObserver);
-  }
-
-  @Override
-  public void copyTo(
-      SegmentServiceProto.CopyToRequest request,
-      StreamObserver<SegmentServiceProto.CopyToResponse> responseObserver) {
+  public void syncCmd(
+      SegmentServiceProto.SyncCmdRequest request,
+      StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
     Segment segment =
         this.localSegmentManager.getSegment(
             request.getTopicId(), request.getPartition(), request.getIndex());
+    segment.syncCmd(request, responseObserver);
+  }
+
+  @Override
+  public void sync(
+      SegmentServiceProto.SyncRequest request,
+      StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
+    Segment segment =
+        this.localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    segment.sync(request, responseObserver);
   }
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
+  }
+
+  public void setDataNodeCnx(DataNodeCnx dataNodeCnx) {
+    this.dataNodeCnx = dataNodeCnx;
   }
 }

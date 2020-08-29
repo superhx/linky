@@ -19,9 +19,9 @@ service SegmentService {
 
     rpc seal(SealRequest) returns (SealResponse) {}
 
-    rpc copyFrom(CopyFromRequest) returns (CopyFromResponse) {}
+    rpc syncCmd(SyncCmdRequest) returns (SyncCmdResponse) {}
 
-    rpc copyTo(CopyToRequest) returns (CopyToResponse) {}
+    rpc sync(SyncRequest) returns (stream SyncResponse) {}
 }
 
 message GetRecordRequest {
@@ -41,7 +41,7 @@ message GetRecordResponse {
 }
 
 message ReplicateRequest {
-    BatchRecord batchRecord = 4;
+    BatchRecord batchRecord = 1;
 }
 
 message ReplicateResponse {
@@ -73,25 +73,23 @@ message SealResponse {
     int64 endOffset = 1;
 }
 
-message CopyFromRequest {
-    int32 epoch = 1;
-    int32 topicId = 2;
-    int32 partition = 3;
-    int32 index = 4;
-    string address = 5;
-    int64 endOffset = 6;
-}
-
-message CopyFromResponse {
-}
-
-message CopyToRequest {
+message SyncCmdRequest {
     int32 topicId = 1;
     int32 partition = 2;
     int32 index = 3;
     string address = 4;
-    int64 startOffset = 5;
 }
 
-message CopyToResponse {
+message SyncCmdResponse {
+}
+
+message SyncRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+    int64 startOffset = 4;
+}
+
+message SyncResponse {
+    BatchRecord batchRecord = 1;
 }

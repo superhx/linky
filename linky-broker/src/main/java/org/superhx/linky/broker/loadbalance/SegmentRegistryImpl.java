@@ -31,18 +31,20 @@ import org.superhx.linky.service.proto.SegmentMeta;
 import org.superhx.linky.service.proto.TopicMeta;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.NO_OFFSET;
+import static org.superhx.linky.broker.persistence.Segment.SEAL_MARK;
 
 public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManagerServiceImplBase
     implements SegmentRegistry, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(SegmentRegistryImpl.class);
+  private static final long KEEPALIVE = TimeUnit.SECONDS.toMillis(10);
   private Map<SegmentKey, SegmentMeta.Builder> segments = null;
-  private Map<Long, Map<SegmentReplicaKey, Timestamped<SegmentMeta>>> aliveSegments =
+  private Map<SegmentReplicaKey, Timestamped<SegmentMeta>> aliveSegments =
       new ConcurrentHashMap<>();
+  private Set<SegmentReplicaKey> syncing = new CopyOnWriteArraySet<>();
 
   private ControlNodeCnx controlNodeCnx;
   private NodeRegistry nodeRegistry;
@@ -52,8 +54,96 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   private LinkyElection election;
   private boolean isLeader;
 
+  private ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
   public void init() {
     this.segments = loadSegments();
+    scheduler.scheduleWithFixedDelay(
+        () -> {
+          checkSegments();
+        },
+        30,
+        30,
+        TimeUnit.SECONDS);
+  }
+
+  private void checkSegments() {
+    if (!isLeader) {
+      return;
+    }
+    Map<SegmentKey, SegmentMeta.Builder> segments = this.segments;
+    for (Map.Entry<SegmentKey, SegmentMeta.Builder> entry : segments.entrySet()) {
+      SegmentMeta meta = getAliveSegmentMeta(entry.getValue());
+      if ((meta.getFlag() & SEAL_MARK) == 0) {
+        continue;
+      }
+      SegmentMeta.Replica intactReplica = null;
+      for (SegmentMeta.Replica replica : meta.getReplicasList()) {
+        if (replica.getReplicaOffset() == meta.getEndOffset() - 1) {
+          intactReplica = replica;
+          break;
+        }
+      }
+      if (intactReplica != null) {
+        for (SegmentMeta.Replica replica : meta.getReplicasList()) {
+          SegmentReplicaKey segmentReplicaKey =
+              new SegmentReplicaKey(
+                  meta.getTopicId(), meta.getPartition(), meta.getIndex(), replica.getAddress());
+          if (syncing.contains(segmentReplicaKey)) {
+            continue;
+          }
+          if (replica.getReplicaOffset() >= meta.getEndOffset() - 1) {
+            continue;
+          }
+          syncing.add(segmentReplicaKey);
+          log.info("sync {}", meta);
+          controlNodeCnx
+              .getSegmentServiceStub(replica.getAddress())
+              .syncCmd(
+                  SegmentServiceProto.SyncCmdRequest.newBuilder()
+                      .setAddress(intactReplica.getAddress())
+                      .setTopicId(meta.getTopicId())
+                      .setPartition(meta.getPartition())
+                      .setIndex(meta.getIndex())
+                      .build(),
+                  new StreamObserver<SegmentServiceProto.SyncCmdResponse>() {
+                    @Override
+                    public void onNext(SegmentServiceProto.SyncCmdResponse syncCmdResponse) {}
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                      log.info("syncCmd fail", throwable);
+                      syncing.remove(segmentReplicaKey);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                      syncing.remove(segmentReplicaKey);
+                    }
+                  });
+        }
+      } else {
+        log.warn("cannot find intactReplica for {}", meta);
+      }
+    }
+  }
+
+  private SegmentMeta getAliveSegmentMeta(SegmentMeta.Builder meta) {
+    List<SegmentMeta.Replica> replicas = new LinkedList<>();
+    for (SegmentMeta.Replica replica : meta.getReplicasList()) {
+      SegmentReplicaKey segmentReplicaKey =
+          new SegmentReplicaKey(
+              meta.getTopicId(), meta.getPartition(), meta.getIndex(), replica.getAddress());
+      Timestamped<SegmentMeta> timestamped = aliveSegments.get(segmentReplicaKey);
+      if (timestamped == null) {
+        continue;
+      }
+      if (timestamped.getTimestamp() + KEEPALIVE < System.currentTimeMillis()) {
+        continue;
+      }
+      replicas.add(timestamped.getData().getReplicas(0));
+    }
+    return meta.clone().clearReplicas().addAllReplicas(replicas).build();
   }
 
   private Map<SegmentKey, SegmentMeta.Builder> loadSegments() {
@@ -86,13 +176,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   @Override
   public void register(SegmentMeta segment) {
     checkLeadership();
-    long topicPartitionId = Utils.topicPartitionId(segment.getTopicId(), segment.getPartition());
-    Map<SegmentReplicaKey, Timestamped<SegmentMeta>> segments = aliveSegments.get(topicPartitionId);
-    if (segments == null) {
-      segments = new ConcurrentHashMap<>();
-      aliveSegments.put(topicPartitionId, segments);
-      segments = aliveSegments.get(topicPartitionId);
-    }
     for (SegmentMeta.Replica replica : segment.getReplicasList()) {
       SegmentReplicaKey key =
           new SegmentReplicaKey(
@@ -100,7 +183,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
               segment.getPartition(),
               segment.getIndex(),
               replica.getAddress());
-      segments.put(key, new Timestamped<>(segment));
+      aliveSegments.put(key, new Timestamped<>(segment));
     }
   }
 
@@ -263,7 +346,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                         .build());
               }
               meta.setEndOffset(endOffset);
-              meta.setFlag(meta.getFlag() & Segment.SEAL_MARK);
+              meta.setFlag(meta.getFlag() | Segment.SEAL_MARK);
               kvStore.put(
                   "segments/"
                       + Utils.getSegmentHex(
@@ -310,7 +393,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   @Override
   public synchronized void onChanged(LinkyElection.Leader leader) {
     if (election.isLeader()) {
-      init();
+      this.segments = loadSegments();
       isLeader = true;
     } else {
       isLeader = false;
