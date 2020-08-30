@@ -236,9 +236,9 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
         .thenAccept(
             r -> {
               kvStore.put(
-                  "segments/"
-                      + Utils.getSegmentHex(
-                          request.getTopicId(), request.getPartition(), request.getLastIndex() + 1),
+                  String.format(
+                      "segments/%s/%s/%s",
+                      request.getTopicId(), request.getPartition(), request.getLastIndex() + 1),
                   Utils.pb2jsonBytes(builder.clone()));
               this.segments.put(
                   new SegmentKey(
@@ -348,9 +348,9 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
               meta.setEndOffset(endOffset);
               meta.setFlag(meta.getFlag() | Segment.SEAL_MARK);
               kvStore.put(
-                  "segments/"
-                      + Utils.getSegmentHex(
-                          request.getTopicId(), request.getPartition(), request.getIndex()),
+                  String.format(
+                      "segments/%s/%s/%s",
+                      request.getTopicId(), request.getPartition(), request.getIndex()),
                   Utils.pb2jsonBytes(meta.clone()));
               responseObserver.onNext(
                   SegmentManagerServiceProto.SealResponse.newBuilder()
@@ -392,16 +392,14 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
 
   @Override
   public synchronized void onChanged(LinkyElection.Leader leader) {
-    if (election.isLeader()) {
+    if (leader.isCurrentNode()) {
       this.segments = loadSegments();
-      isLeader = true;
     } else {
-      isLeader = false;
     }
   }
 
   private void checkLeadership() {
-    if (!isLeader) {
+    if (!election.isLeader()) {
       throw new LinkyIOException("NOT LEADER");
     }
   }

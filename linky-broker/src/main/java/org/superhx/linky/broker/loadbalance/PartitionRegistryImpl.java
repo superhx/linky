@@ -19,6 +19,7 @@ package org.superhx.linky.broker.loadbalance;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.TopicMeta;
@@ -26,8 +27,10 @@ import org.superhx.linky.service.proto.TopicMeta;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
-public class PartitionRegistryImpl implements PartitionRegistry {
+public class PartitionRegistryImpl
+    implements PartitionRegistry, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(PartitionRegistryImpl.class);
   private AtomicInteger topicIdCounter = new AtomicInteger();
   private Map<Integer, TopicMeta> topicIdMetaMap = new ConcurrentHashMap<>();
@@ -42,33 +45,6 @@ public class PartitionRegistryImpl implements PartitionRegistry {
   private KVStore kvStore;
 
   public void start() {
-    try {
-      kvStore
-          .get("topics/")
-          .thenAccept(
-              r -> {
-                r.getKvs().stream()
-                    .forEach(
-                        m -> {
-                          try {
-                            TopicMeta meta = TopicMeta.parseFrom(m.getValue().getBytes());
-                            topicIdMetaMap.put(meta.getId(), meta);
-                            topicMetas.put(meta.getTopic(), meta);
-                            topicPartitionMap.put(meta.getId(), new ConcurrentHashMap<>());
-                            if (topicIdCounter.get() < meta.getId()) {
-                              topicIdCounter.set(meta.getId());
-                            }
-                            log.info("load topic config {}", meta);
-                          } catch (InvalidProtocolBufferException e) {
-                            e.printStackTrace();
-                          }
-                        });
-              })
-          .get();
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
-
     schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 5000, TimeUnit.MILLISECONDS);
   }
 
@@ -135,10 +111,6 @@ public class PartitionRegistryImpl implements PartitionRegistry {
       log.info("cannot find node in cluster, exit rebalance");
       return;
     }
-    //    if (nodes.size() < 2) {
-    //      log.info("only 1 node in cluster, exit rebalance");
-    //      return;
-    //    }
 
     int counter = 0;
     for (TopicMeta topicMeta : topicMetas) {
@@ -236,5 +208,79 @@ public class PartitionRegistryImpl implements PartitionRegistry {
 
   public void setElection(LinkyElection election) {
     this.election = election;
+  }
+
+  @Override
+  public void onChanged(LinkyElection.Leader leader) {
+    try {
+      onChanged0(leader);
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+  }
+
+  private void onChanged0(LinkyElection.Leader leader)
+      throws ExecutionException, InterruptedException {
+    if (!leader.isCurrentNode()) {
+      return;
+    }
+    kvStore
+        .get("topics/")
+        .thenAccept(
+            r ->
+                r.getKvs().stream()
+                    .forEach(
+                        m -> {
+                          try {
+                            TopicMeta meta = TopicMeta.parseFrom(m.getValue().getBytes());
+                            topicIdMetaMap.put(meta.getId(), meta);
+                            topicMetas.put(meta.getTopic(), meta);
+                            topicPartitionMap.put(meta.getId(), new ConcurrentHashMap<>());
+                            if (topicIdCounter.get() < meta.getId()) {
+                              topicIdCounter.set(meta.getId());
+                            }
+                            log.info("load topic config {}", meta);
+                          } catch (InvalidProtocolBufferException e) {
+                            e.printStackTrace();
+                          }
+                        }))
+        .get();
+    List<String> nodes =
+        kvStore
+            .get("controller/node/")
+            .thenApply(
+                rst ->
+                    rst.getKvs().stream()
+                        .map(kv -> kv.getValue().toString(Utils.DEFAULT_CHARSET))
+                        .collect(Collectors.toList()))
+            .get();
+    CompletableFuture.allOf(
+            nodes.stream()
+                .map(
+                    node ->
+                        controlNodeCnx
+                            .getPartitionStatus(node)
+                            .thenAccept(
+                                metas -> {
+                                  metas.forEach(
+                                      meta -> {
+                                        log.info("get {} partition status {}", node, metas);
+                                        if (!topicPartitionMap.containsKey(meta.getTopicId())) {
+                                          topicPartitionMap.put(
+                                              meta.getTopicId(), new ConcurrentHashMap<>());
+                                        }
+                                        topicPartitionMap
+                                            .get(meta.getTopicId())
+                                            .put(meta.getPartition(), meta);
+                                      });
+                                })
+                            .exceptionally(
+                                t -> {
+                                  log.warn("get {} partition status fail", node, t);
+                                  return null;
+                                }))
+                .collect(Collectors.toList())
+                .toArray(new CompletableFuture[0]))
+        .get();
   }
 }

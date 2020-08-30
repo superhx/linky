@@ -26,10 +26,12 @@ import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.PartitionServiceGrpc;
 import org.superhx.linky.service.proto.TopicMeta;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.stream.Collectors;
 
 import static org.superhx.linky.service.proto.PartitionServiceProto.*;
 
@@ -129,6 +131,20 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
               responseObserver.onCompleted();
               return null;
             });
+  }
+
+  @Override
+  public void status(StatusRequest request, StreamObserver<StatusResponse> responseObserver) {
+    List<PartitionMeta> metas =
+        partitions.values().stream()
+            .filter(
+                p ->
+                    Partition.PartitionStatus.OPEN.equals(p.status())
+                        || Partition.PartitionStatus.OPENING.equals(p.status()))
+            .map(p -> p.meta())
+            .collect(Collectors.toList());
+    responseObserver.onNext(StatusResponse.newBuilder().addAllPartitions(metas).build());
+    responseObserver.onCompleted();
   }
 
   private synchronized Semaphore getPartitionLock(long topicPartition) {

@@ -89,6 +89,7 @@ public class LinkyBrokerStartup {
     segmentRegistry.setPartitionRegistry(partitionRegistry);
     segmentRegistry.setElection(election);
     election.registerListener(segmentRegistry);
+    election.registerListener((PartitionRegistryImpl) partitionRegistry);
     controllerService.setNodeRegistry(nodeRegistry);
     controllerService.setSegmentRegistry(segmentRegistry);
     ((PartitionRegistryImpl) partitionRegistry).setElection(election);

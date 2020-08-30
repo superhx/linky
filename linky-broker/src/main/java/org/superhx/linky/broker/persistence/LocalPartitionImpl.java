@@ -223,6 +223,16 @@ public class LocalPartitionImpl implements Partition {
     return closeFuture;
   }
 
+  @Override
+  public PartitionStatus status() {
+    return this.status.get();
+  }
+
+  @Override
+  public PartitionMeta meta() {
+    return this.meta;
+  }
+
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
   }

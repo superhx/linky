@@ -19,6 +19,7 @@ package org.superhx.linky.broker.persistence;
 import java.util.concurrent.CompletableFuture;
 
 import org.superhx.linky.service.proto.BatchRecord;
+import org.superhx.linky.service.proto.PartitionMeta;
 
 public interface Partition {
 
@@ -29,6 +30,10 @@ public interface Partition {
     CompletableFuture<PartitionStatus> open();
 
     CompletableFuture<Void> close();
+
+    PartitionStatus status();
+
+    PartitionMeta meta();
 
     class AppendResult {
         private Status status = Status.SUCCESS;

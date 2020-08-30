@@ -29,6 +29,7 @@ import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Utils;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class LinkyElection {
@@ -68,16 +69,20 @@ public class LinkyElection {
                   electionName,
                   new Election.Listener() {
                     @Override
-                    public void onNext(LeaderResponse response) {
+                    public synchronized void onNext(LeaderResponse response) {
                       Leader newLeader =
                           new Leader(
                               response.getKv().getValue().toString(Utils.DEFAULT_CHARSET),
                               response.getHeader().getRevision());
                       log.info("controller node change from {} to {}", leader, newLeader);
-                      leader = newLeader;
                       for (LeaderChangeListener listener : listeners) {
-                        listener.onChanged(leader);
+                        try {
+                          listener.onChanged(newLeader);
+                        } catch (Throwable t) {
+                          log.warn("LeaderChangeListener {} onChanged fail", listener, t);
+                        }
                       }
+                      leader = newLeader;
                     }
 
                     @Override
@@ -115,7 +120,7 @@ public class LinkyElection {
     void onChanged(Leader leader);
   }
 
-  public static class Leader {
+  public class Leader {
     private String address;
     private long epoch;
 
@@ -138,6 +143,15 @@ public class LinkyElection {
 
     public void setEpoch(long epoch) {
       this.epoch = epoch;
+    }
+
+    public boolean isCurrentNode() {
+      return Objects.equals(address, brokerContext.getAddress());
+    }
+
+    @Override
+    public String toString() {
+      return "address=" + address + ",epoch=" + epoch;
     }
   }
 }

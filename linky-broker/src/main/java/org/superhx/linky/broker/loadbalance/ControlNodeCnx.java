@@ -29,6 +29,7 @@ import org.superhx.linky.service.proto.PartitionServiceGrpc;
 import org.superhx.linky.service.proto.PartitionServiceProto;
 import org.superhx.linky.service.proto.SegmentMeta;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -132,7 +133,29 @@ public class ControlNodeCnx {
             .toArray(new CompletableFuture[0]));
   }
 
-  private PartitionServiceGrpc.PartitionServiceStub getPartitionServiceStub(String address) {
+  public CompletableFuture<List<PartitionMeta>> getPartitionStatus(String address) {
+    CompletableFuture<List<PartitionMeta>> future = new CompletableFuture<>();
+    getPartitionServiceStub(address)
+        .status(
+            PartitionServiceProto.StatusRequest.newBuilder().build(),
+            new StreamObserver<PartitionServiceProto.StatusResponse>() {
+              @Override
+              public void onNext(PartitionServiceProto.StatusResponse statusResponse) {
+                future.complete(statusResponse.getPartitionsList());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return future;
+  }
+
+  public PartitionServiceGrpc.PartitionServiceStub getPartitionServiceStub(String address) {
     Channel channel = getChannel(address);
     return PartitionServiceGrpc.newStub(channel);
   }

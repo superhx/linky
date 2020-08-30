@@ -143,7 +143,7 @@ public interface Segment {
   //      this.confirmOffset = confirmOffset;
   //    }
   //
-  //    public Status getStatus() {
+  //    public Status status() {
   //      return status;
   //    }
   //

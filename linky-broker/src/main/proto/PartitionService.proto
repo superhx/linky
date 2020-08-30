@@ -12,6 +12,8 @@ service PartitionService {
     rpc close(CloseRequest) returns (CloseResponse) {}
 
     rpc open(OpenRequest) returns (OpenResponse) {}
+
+    rpc status(StatusRequest) returns (StatusResponse) {}
 }
 
 message CloseRequest {
@@ -37,4 +39,10 @@ message OpenResponse {
         FAIL = 1;
     }
     Status status = 1;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+    repeated PartitionMeta partitions = 1;
 }
