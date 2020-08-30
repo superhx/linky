@@ -34,6 +34,7 @@ message OpenRequest {
 message OpenResponse {
     enum Status {
         SUCCESS = 0;
+        FAIL = 1;
     }
     Status status = 1;
 }

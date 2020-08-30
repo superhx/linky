@@ -153,14 +153,15 @@ public class LocalPartitionImpl implements Partition {
   }
 
   @Override
-  public CompletableFuture<Void> open() {
+  public CompletableFuture<PartitionStatus> open() {
     if (!status.compareAndSet(PartitionStatus.NOOP, PartitionStatus.OPENING)) {
       log.warn("cannot open {} status partition {}", status.get(), meta);
-      CompletableFuture.completedFuture(null);
+      return CompletableFuture.completedFuture(this.status.get());
     }
 
     log.info("partition {} opening...", meta);
-    return localSegmentManager
+    CompletableFuture<PartitionStatus> openFuture = new CompletableFuture<>();
+    localSegmentManager
         .getSegments(meta.getTopicId(), meta.getPartition())
         .thenCompose(
             s -> {
@@ -178,37 +179,51 @@ public class LocalPartitionImpl implements Partition {
                   segmentStartOffsets.put(segment.getStartOffset(), segment);
                 }
               }
+              this.status.set(PartitionStatus.OPEN);
               log.info("partition {} opened", meta);
+              openFuture.complete(this.status.get());
+            })
+        .exceptionally(
+            t -> {
+              log.warn("partition {} open fail", meta, t);
+              close()
+                  .handle(
+                      (r, ct) -> {
+                        openFuture.complete(this.status.get());
+                        return null;
+                      });
+              return null;
             });
+    return openFuture;
   }
 
   @Override
   public CompletableFuture<Void> close() {
+    CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     status.set(PartitionStatus.SHUTTING);
     log.info("partition {} closing...", meta);
     segments = null;
     if (lastSegment == null) {
       log.info("partition {} closed", meta);
-      return CompletableFuture.completedFuture(null);
+      closeFuture.complete(null);
+      return closeFuture;
     }
-    return lastSegment
+    lastSegment
         .seal()
-        .thenAccept(
-            s -> {
+        .handle(
+            (nil, t) -> {
+              if (t != null) {
+                log.warn("partition {} close fail", meta, t);
+              }
               status.compareAndSet(PartitionStatus.SHUTTING, PartitionStatus.SHUTDOWN);
               log.info("partition {} closed", meta);
+              closeFuture.complete(null);
+              return null;
             });
+    return closeFuture;
   }
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
-  }
-
-  enum PartitionStatus {
-    NOOP,
-    OPENING,
-    OPEN,
-    SHUTTING,
-    SHUTDOWN
   }
 }

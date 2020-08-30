@@ -29,6 +29,7 @@ import org.superhx.linky.service.proto.TopicMeta;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 
 import static org.superhx.linky.service.proto.PartitionServiceProto.*;
 
@@ -36,22 +37,26 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
   private static final Logger log = LoggerFactory.getLogger(PartitionService.class);
   private Map<String, TopicMeta> topicMetas = new ConcurrentHashMap<>();
   private Map<Long, Partition> partitions = new ConcurrentHashMap<>();
+  private Map<Long, Semaphore> partitionLocks = new ConcurrentHashMap<>();
 
   private PersistenceFactory persistenceFactory;
 
   public CompletableFuture<CloseResponse> close(CloseRequest request) {
     PartitionMeta meta = request.getMeta();
     long topicPartition = Utils.topicPartitionId(meta.getTopicId(), meta.getPartition());
+    Semaphore lock = getPartitionLock(topicPartition);
     Partition partition = partitions.get(topicPartition);
-    if (partition == null) {
+    if (partition == null || !lock.tryAcquire()) {
+      log.info("close {} fail cause of cannot get lock", meta);
       return CompletableFuture.completedFuture(
           CloseResponse.newBuilder().setStatus(CloseResponse.Status.SUCCESS).build());
     }
     return partition
         .close()
-        .thenApply(
-            n -> {
+        .handle(
+            (nil, t) -> {
               partitions.remove(topicPartition);
+              lock.release();
               return CloseResponse.newBuilder().setStatus(CloseResponse.Status.SUCCESS).build();
             });
   }
@@ -59,6 +64,12 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
   public CompletableFuture<OpenResponse> open(OpenRequest request) {
     PartitionMeta meta = request.getMeta();
     long topicPartition = Utils.topicPartitionId(meta.getTopicId(), meta.getPartition());
+    Semaphore lock = getPartitionLock(topicPartition);
+    if (!lock.tryAcquire()) {
+      log.info("open {} fail cause of cannot get lock", meta);
+      return CompletableFuture.completedFuture(
+          OpenResponse.newBuilder().setStatus(OpenResponse.Status.FAIL).build());
+    }
     Partition partition = partitions.get(topicPartition);
     if (partition == null) {
       partition = persistenceFactory.newPartition(meta);
@@ -70,7 +81,18 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
 
     return partition
         .open()
-        .thenApply(r -> OpenResponse.newBuilder().setStatus(OpenResponse.Status.SUCCESS).build());
+        .handle(
+            (status, t) -> {
+              lock.release();
+              if (status == Partition.PartitionStatus.OPEN) {
+                return OpenResponse.newBuilder().setStatus(OpenResponse.Status.SUCCESS).build();
+              } else {
+                if (status != Partition.PartitionStatus.OPENING) {
+                  partitions.remove(topicPartition);
+                }
+                return OpenResponse.newBuilder().setStatus(OpenResponse.Status.FAIL).build();
+              }
+            });
   }
 
   public Partition getPartition(int topic, int partition) {
@@ -107,6 +129,13 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
               responseObserver.onCompleted();
               return null;
             });
+  }
+
+  private synchronized Semaphore getPartitionLock(long topicPartition) {
+    if (!partitionLocks.containsKey(topicPartition)) {
+      partitionLocks.put(topicPartition, new Semaphore(1));
+    }
+    return partitionLocks.get(topicPartition);
   }
 
   public void setPersistenceFactory(PersistenceFactory persistenceFactory) {

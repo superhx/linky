@@ -26,7 +26,7 @@ public interface Partition {
 
     CompletableFuture<BatchRecord> get(long offset);
 
-    CompletableFuture<Void> open();
+    CompletableFuture<PartitionStatus> open();
 
     CompletableFuture<Void> close();
 
@@ -57,5 +57,14 @@ public interface Partition {
 
     enum Status {
                  SUCCESS;
+    }
+
+    enum PartitionStatus {
+        NOOP,
+        OPENING,
+        OPEN,
+        SHUTTING,
+        SHUTDOWN,
+        ERROR
     }
 }
