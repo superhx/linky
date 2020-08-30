@@ -107,7 +107,7 @@ public class LinkyBrokerStartup {
             .build();
 
     partitionRegistry.start();
-    partitionRegistry.createTopic("FOO", 1, 3);
+    partitionRegistry.createTopic("FOO", 2, 3);
 
     schedule.scheduleWithFixedDelay(
         () -> {

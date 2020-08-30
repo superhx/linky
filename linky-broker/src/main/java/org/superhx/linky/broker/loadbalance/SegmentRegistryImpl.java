@@ -57,7 +57,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   private ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
   public void init() {
-    this.segments = loadSegments();
     scheduler.scheduleWithFixedDelay(
         () -> {
           checkSegments();

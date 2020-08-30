@@ -107,6 +107,8 @@ public class PartitionRegistryImpl
     Collections.sort(topicMetas, Comparator.comparing(TopicMeta::getTopic));
     List<NodeMeta> nodes = new ArrayList<>(nodeRegistry.getAliveNodes());
     Collections.sort(nodes, Comparator.comparing(NodeMeta::getAddress));
+    Set<NodeMeta> nodeSet = new HashSet<>();
+    nodeSet.addAll(nodes);
     if (nodes.size() == 0) {
       log.info("cannot find node in cluster, exit rebalance");
       return;
@@ -116,14 +118,30 @@ public class PartitionRegistryImpl
     for (TopicMeta topicMeta : topicMetas) {
       List<PartitionMeta> partitionMetas = new ArrayList<>(topicMeta.getPartitionNum());
       for (int i = 0; i < topicMeta.getPartitionNum(); i++) {
-        partitionMetas.add(
-            PartitionMeta.newBuilder()
-                .setTopicId(topicMeta.getId())
-                .setTopic(topicIdMetaMap.get(topicMeta.getId()).getTopic())
-                .setPartition(i)
-                .setAddress(nodes.get(counter % nodes.size()).getAddress())
-                .setEpoch(nodes.get(counter % nodes.size()).getEpoch())
-                .build());
+        int partition = i;
+        PartitionMeta partitionMeta =
+            Optional.ofNullable(topicPartitionMap.get(topicMeta.getId()))
+                .map(m -> m.get(partition))
+                .orElse(null);
+        if (partitionMeta == null
+            || !nodeSet.contains(
+                NodeMeta.newBuilder()
+                    .setAddress(partitionMeta.getAddress())
+                    .setEpoch(partitionMeta.getEpoch())
+                    .build())) {
+          partitionMeta =
+              PartitionMeta.newBuilder()
+                  .setTopicId(topicMeta.getId())
+                  .setTopic(topicIdMetaMap.get(topicMeta.getId()).getTopic())
+                  .setPartition(i)
+                  .setAddress(nodes.get(counter % nodes.size()).getAddress())
+                  .setEpoch(nodes.get(counter % nodes.size()).getEpoch())
+                  .build();
+        }
+        if (topicPartitionMap.containsKey(topicMeta.getId())
+            && topicPartitionMap.get(topicMeta.getId()).containsKey(i)) {}
+
+        partitionMetas.add(partitionMeta);
         counter++;
       }
       newTopicPartitionMap.put(topicMeta.getId(), partitionMetas);
@@ -254,6 +272,7 @@ public class PartitionRegistryImpl
                         .map(kv -> kv.getValue().toString(Utils.DEFAULT_CHARSET))
                         .collect(Collectors.toList()))
             .get();
+
     CompletableFuture.allOf(
             nodes.stream()
                 .map(
@@ -261,18 +280,25 @@ public class PartitionRegistryImpl
                         controlNodeCnx
                             .getPartitionStatus(node)
                             .thenAccept(
-                                metas -> {
-                                  metas.forEach(
-                                      meta -> {
-                                        log.info("get {} partition status {}", node, metas);
-                                        if (!topicPartitionMap.containsKey(meta.getTopicId())) {
-                                          topicPartitionMap.put(
-                                              meta.getTopicId(), new ConcurrentHashMap<>());
-                                        }
-                                        topicPartitionMap
-                                            .get(meta.getTopicId())
-                                            .put(meta.getPartition(), meta);
-                                      });
+                                resp -> {
+                                  nodeRegistry.register(
+                                      NodeMeta.newBuilder()
+                                          .setAddress(node)
+                                          .setEpoch(resp.getEpoch())
+                                          .build());
+                                  log.info(
+                                      "get {} partition status {}", node, resp.getPartitionsList());
+                                  resp.getPartitionsList()
+                                      .forEach(
+                                          meta -> {
+                                            if (!topicPartitionMap.containsKey(meta.getTopicId())) {
+                                              topicPartitionMap.put(
+                                                  meta.getTopicId(), new ConcurrentHashMap<>());
+                                            }
+                                            topicPartitionMap
+                                                .get(meta.getTopicId())
+                                                .put(meta.getPartition(), meta);
+                                          });
                                 })
                             .exceptionally(
                                 t -> {

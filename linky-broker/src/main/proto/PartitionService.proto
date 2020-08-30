@@ -45,4 +45,5 @@ message StatusRequest {}
 
 message StatusResponse {
     repeated PartitionMeta partitions = 1;
+    int32 epoch = 2;
 }

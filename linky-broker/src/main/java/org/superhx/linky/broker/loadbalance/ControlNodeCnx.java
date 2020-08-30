@@ -133,15 +133,15 @@ public class ControlNodeCnx {
             .toArray(new CompletableFuture[0]));
   }
 
-  public CompletableFuture<List<PartitionMeta>> getPartitionStatus(String address) {
-    CompletableFuture<List<PartitionMeta>> future = new CompletableFuture<>();
+  public CompletableFuture<PartitionServiceProto.StatusResponse> getPartitionStatus(String address) {
+    CompletableFuture<PartitionServiceProto.StatusResponse> future = new CompletableFuture<>();
     getPartitionServiceStub(address)
         .status(
             PartitionServiceProto.StatusRequest.newBuilder().build(),
             new StreamObserver<PartitionServiceProto.StatusResponse>() {
               @Override
               public void onNext(PartitionServiceProto.StatusResponse statusResponse) {
-                future.complete(statusResponse.getPartitionsList());
+                future.complete(statusResponse);
               }
 
               @Override
