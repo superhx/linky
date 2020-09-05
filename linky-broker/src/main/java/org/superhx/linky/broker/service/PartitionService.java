@@ -19,6 +19,7 @@ package org.superhx.linky.broker.service;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.persistence.Partition;
 import org.superhx.linky.broker.persistence.PersistenceFactory;
@@ -40,6 +41,7 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
   private Map<String, TopicMeta> topicMetas = new ConcurrentHashMap<>();
   private Map<Long, Partition> partitions = new ConcurrentHashMap<>();
   private Map<Long, Semaphore> partitionLocks = new ConcurrentHashMap<>();
+  private BrokerContext brokerContext;
 
   private PersistenceFactory persistenceFactory;
 
@@ -143,7 +145,7 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
                         || Partition.PartitionStatus.OPENING.equals(p.status()))
             .map(p -> p.meta())
             .collect(Collectors.toList());
-    responseObserver.onNext(StatusResponse.newBuilder().addAllPartitions(metas).build());
+    responseObserver.onNext(StatusResponse.newBuilder().addAllPartitions(metas).setEpoch(brokerContext.getEpoch()).build());
     responseObserver.onCompleted();
   }
 
@@ -156,5 +158,9 @@ public class PartitionService extends PartitionServiceGrpc.PartitionServiceImplB
 
   public void setPersistenceFactory(PersistenceFactory persistenceFactory) {
     this.persistenceFactory = persistenceFactory;
+  }
+
+  public void setBrokerContext(BrokerContext brokerContext) {
+    this.brokerContext = brokerContext;
   }
 }

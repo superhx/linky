@@ -34,8 +34,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static org.superhx.linky.broker.persistence.Segment.NO_OFFSET;
-import static org.superhx.linky.broker.persistence.Segment.SEAL_MARK;
+import static org.superhx.linky.broker.persistence.Segment.*;
 
 public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManagerServiceImplBase
     implements SegmentRegistry, LinkyElection.LeaderChangeListener {
@@ -52,7 +51,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   private PartitionRegistry partitionRegistry;
   private KVStore kvStore;
   private LinkyElection election;
-  private boolean isLeader;
 
   private ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -67,7 +65,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   }
 
   private void checkSegments() {
-    if (!isLeader) {
+    if (!election.isLeader()) {
       return;
     }
     Map<SegmentKey, SegmentMeta.Builder> segments = this.segments;
@@ -78,7 +76,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
       }
       SegmentMeta.Replica intactReplica = null;
       for (SegmentMeta.Replica replica : meta.getReplicasList()) {
-        if (replica.getReplicaOffset() == meta.getEndOffset() - 1) {
+        if (replica.getReplicaOffset() >= meta.getEndOffset() - 1) {
           intactReplica = replica;
           break;
         }
@@ -121,6 +119,46 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                     }
                   });
         }
+
+        SegmentMeta onlineSegment = getOnlineSegmentMeta(entry.getValue());
+        List<NodeMeta> nodeMetas = nodeRegistry.getAliveNodes();
+        Set<String> replicas =
+            onlineSegment.getReplicasList().stream()
+                .map(r -> r.getAddress())
+                .collect(Collectors.toSet());
+        SegmentMeta.Builder replicaSegment = onlineSegment.toBuilder().clearReplicas();
+        for (int i = onlineSegment.getReplicasCount();
+            i < partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
+            i++) {
+          for (NodeMeta nodeMeta : nodeMetas) {
+            if (replicas.contains(nodeMeta.getAddress())) {
+              continue;
+            }
+            replicaSegment.addReplicas(
+                SegmentMeta.Replica.newBuilder()
+                    .setAddress(nodeMeta.getAddress())
+                    .setFlag(FOLLOWER_MARK)
+                    .build());
+            replicas.add(nodeMeta.getAddress());
+          }
+          if (replicaSegment.getReplicaNum() != 0) {
+            log.info("enough replica {}", replicaSegment);
+            controlNodeCnx
+                .createSegment(replicaSegment.build())
+                .thenAccept(
+                    nil -> {
+                      for (SegmentMeta.Replica replica : replicaSegment.getReplicasList()) {
+                        aliveSegments.putIfAbsent(
+                            new SegmentReplicaKey(
+                                onlineSegment.getTopicId(),
+                                onlineSegment.getPartition(),
+                                onlineSegment.getIndex(),
+                                replica.getAddress()),
+                            new Timestamped<>(replicaSegment.build()));
+                      }
+                    });
+          }
+        }
       } else {
         log.warn("cannot find intactReplica for {}", meta);
       }
@@ -128,6 +166,14 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   }
 
   private SegmentMeta getAliveSegmentMeta(SegmentMeta.Builder meta) {
+    return getAliveSegmentMeta0(meta, KEEPALIVE);
+  }
+
+  private SegmentMeta getOnlineSegmentMeta(SegmentMeta.Builder meta) {
+    return getAliveSegmentMeta0(meta, TimeUnit.MINUTES.toMillis(1));
+  }
+
+  private SegmentMeta getAliveSegmentMeta0(SegmentMeta.Builder meta, long timeout) {
     List<SegmentMeta.Replica> replicas = new LinkedList<>();
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
       SegmentReplicaKey segmentReplicaKey =
@@ -137,7 +183,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
       if (timestamped == null) {
         continue;
       }
-      if (timestamped.getTimestamp() + KEEPALIVE < System.currentTimeMillis()) {
+      if (timestamped.getTimestamp() + timeout < System.currentTimeMillis()) {
         continue;
       }
       replicas.add(timestamped.getData().getReplicas(0));
@@ -343,6 +389,8 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                     SegmentManagerServiceProto.SealResponse.newBuilder()
                         .setStatus(SegmentManagerServiceProto.SealResponse.Status.FAIL)
                         .build());
+                responseObserver.onCompleted();
+                return;
               }
               meta.setEndOffset(endOffset);
               meta.setFlag(meta.getFlag() | Segment.SEAL_MARK);

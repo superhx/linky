@@ -69,21 +69,21 @@ public class ControlNodeCnx {
     return future;
   }
 
-  public CompletableFuture<Void> openPartition(PartitionMeta partitionMeta) {
+  public CompletableFuture<PartitionServiceProto.OpenResponse.Status> openPartition(PartitionMeta partitionMeta) {
     if (partitionMeta == null) {
       return CompletableFuture.completedFuture(null);
     }
     if (Strings.isNullOrEmpty(partitionMeta.getAddress())) {
       CompletableFuture.completedFuture(null);
     }
-    CompletableFuture<Void> future = new CompletableFuture<>();
+    CompletableFuture<PartitionServiceProto.OpenResponse.Status> future = new CompletableFuture<>();
     getPartitionServiceStub(partitionMeta.getAddress())
         .open(
             PartitionServiceProto.OpenRequest.newBuilder().setMeta(partitionMeta).build(),
             new StreamObserver<PartitionServiceProto.OpenResponse>() {
               @Override
               public void onNext(PartitionServiceProto.OpenResponse openResponse) {
-                future.complete(null);
+                future.complete(openResponse.getStatus());
               }
 
               @Override

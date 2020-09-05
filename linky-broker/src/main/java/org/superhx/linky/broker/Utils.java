@@ -20,6 +20,8 @@ import com.google.common.io.Files;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.MessageOrBuilder;
 import com.google.protobuf.util.JsonFormat;
+import org.superhx.linky.service.proto.NodeMeta;
+import org.superhx.linky.service.proto.PartitionMeta;
 
 import java.io.File;
 import java.io.IOException;
@@ -99,5 +101,12 @@ public class Utils {
     byteBuffer.putInt(index);
     byteBuffer.flip();
     return bytesToHex(byteBuffer.array());
+  }
+
+  public static NodeMeta partitionMeta2NodeMeta(PartitionMeta meta) {
+    if (meta == null) {
+      return null;
+    }
+    return NodeMeta.newBuilder().setAddress(meta.getAddress()).setEpoch(meta.getEpoch()).build();
   }
 }

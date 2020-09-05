@@ -47,6 +47,7 @@ public class LinkyBrokerStartup {
     String port = System.getProperty("port", "9594");
     BrokerContext brokerContext = new BrokerContext();
     brokerContext.setAddress("127.0.0.1:" + port);
+    brokerContext.setEpoch(epoch);
     log.info("broker {} startup", port);
 
     KVStore kvStore = new KVStore();
@@ -60,6 +61,7 @@ public class LinkyBrokerStartup {
 
     recordService.setPartitionService(partitionService);
     partitionService.setPersistenceFactory(persistenceFactory);
+    partitionService.setBrokerContext(brokerContext);
     segmentService.setLocalSegmentManager(localSegmentManager);
     localSegmentManager.setDataNodeCnx(dataNodeCnx);
     localSegmentManager.setPersistenceFactory(persistenceFactory);
@@ -76,6 +78,7 @@ public class LinkyBrokerStartup {
     NodeRegistry nodeRegistry = new NodeRegistryImpl();
     SegmentRegistryImpl segmentRegistry = new SegmentRegistryImpl();
     ControllerService controllerService = new ControllerService();
+    ((PartitionRegistryImpl) partitionRegistry).setBrokerContext(brokerContext);
 
     LinkyElection election = new LinkyElection(brokerContext);
     ((PartitionRegistryImpl) partitionRegistry).setControlNodeCnx(controlNodeCnx);

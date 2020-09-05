@@ -20,6 +20,7 @@ import org.superhx.linky.broker.service.DataNodeCnx;
 
 public class BrokerContext {
   private String address;
+  private long epoch;
   private String storePath;
   private DataNodeCnx dataNodeCnx;
 
@@ -29,6 +30,14 @@ public class BrokerContext {
 
   public void setAddress(String address) {
     this.address = address;
+  }
+
+  public long getEpoch() {
+    return epoch;
+  }
+
+  public void setEpoch(long epoch) {
+    this.epoch = epoch;
   }
 
   public String getStorePath() {

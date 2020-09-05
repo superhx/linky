@@ -34,7 +34,7 @@ public class MemPersistenceFactory implements PersistenceFactory {
 
   @Override
   public Segment newSegment(SegmentMeta segmentMeta) {
-    Segment segment = new LocalSegment(segmentMeta, newWriteAheadLog(), brokerContext);
+    Segment segment = new LocalSegment(segmentMeta, newWriteAheadLog(), brokerContext, false);
     return segment;
   }
 

@@ -78,7 +78,7 @@ public class LocalSegmentManager {
             segments.put(
                 new SegmentKey(topicId, partitionId, segmentIndex),
                 new LocalSegment(
-                    segmentMeta, persistenceFactory.newWriteAheadLog(), brokerContext));
+                    segmentMeta, persistenceFactory.newWriteAheadLog(), brokerContext, true));
           } catch (IOException e) {
             continue;
           }

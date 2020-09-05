@@ -71,7 +71,7 @@ public class LocalSegment implements Segment {
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
 
-  public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext) {
+  public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext, boolean recover) {
     this.storePath =
         String.format(
             "%s/segments/%s/%s/%s",
@@ -114,7 +114,9 @@ public class LocalSegment implements Segment {
       break;
     }
 
-    initReplicator();
+    if (!recover) {
+        initReplicator();
+    }
 
     scheduler.scheduleWithFixedDelay(
         () -> {

@@ -19,9 +19,11 @@ package org.superhx.linky.broker.loadbalance;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
+import org.superhx.linky.service.proto.PartitionServiceProto;
 import org.superhx.linky.service.proto.TopicMeta;
 
 import java.util.*;
@@ -43,6 +45,7 @@ public class PartitionRegistryImpl
   private ControlNodeCnx controlNodeCnx;
   private LinkyElection election;
   private KVStore kvStore;
+  private BrokerContext brokerContext;
 
   public void start() {
     schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 5000, TimeUnit.MILLISECONDS);
@@ -102,110 +105,7 @@ public class PartitionRegistryImpl
     if (!election.isLeader()) {
       return;
     }
-    Map<Integer, List<PartitionMeta>> newTopicPartitionMap = new HashMap<>();
-    List<TopicMeta> topicMetas = new ArrayList<>(topicIdMetaMap.values());
-    Collections.sort(topicMetas, Comparator.comparing(TopicMeta::getTopic));
-    List<NodeMeta> nodes = new ArrayList<>(nodeRegistry.getAliveNodes());
-    Collections.sort(nodes, Comparator.comparing(NodeMeta::getAddress));
-    Set<NodeMeta> nodeSet = new HashSet<>();
-    nodeSet.addAll(nodes);
-    if (nodes.size() == 0) {
-      log.info("cannot find node in cluster, exit rebalance");
-      return;
-    }
-
-    int counter = 0;
-    for (TopicMeta topicMeta : topicMetas) {
-      List<PartitionMeta> partitionMetas = new ArrayList<>(topicMeta.getPartitionNum());
-      for (int i = 0; i < topicMeta.getPartitionNum(); i++) {
-        int partition = i;
-        PartitionMeta partitionMeta =
-            Optional.ofNullable(topicPartitionMap.get(topicMeta.getId()))
-                .map(m -> m.get(partition))
-                .orElse(null);
-        if (partitionMeta == null
-            || !nodeSet.contains(
-                NodeMeta.newBuilder()
-                    .setAddress(partitionMeta.getAddress())
-                    .setEpoch(partitionMeta.getEpoch())
-                    .build())) {
-          partitionMeta =
-              PartitionMeta.newBuilder()
-                  .setTopicId(topicMeta.getId())
-                  .setTopic(topicIdMetaMap.get(topicMeta.getId()).getTopic())
-                  .setPartition(i)
-                  .setAddress(nodes.get(counter % nodes.size()).getAddress())
-                  .setEpoch(nodes.get(counter % nodes.size()).getEpoch())
-                  .build();
-        }
-        if (topicPartitionMap.containsKey(topicMeta.getId())
-            && topicPartitionMap.get(topicMeta.getId()).containsKey(i)) {}
-
-        partitionMetas.add(partitionMeta);
-        counter++;
-      }
-      newTopicPartitionMap.put(topicMeta.getId(), partitionMetas);
-    }
-
-    List<CompletableFuture<?>> futures = new LinkedList<>();
-    for (Integer topic : newTopicPartitionMap.keySet()) {
-      List<PartitionMeta> newPartitionMetas = newTopicPartitionMap.get(topic);
-      List<PartitionMeta> oldPartitionMetas =
-          new ArrayList<>(topicPartitionMap.get(topic).values());
-      List<PartitionMeta> open = new LinkedList<>();
-      List<PartitionMeta> close = new LinkedList<>();
-      int partitionIndex = 0;
-      for (;
-          partitionIndex < newPartitionMetas.size() && partitionIndex < oldPartitionMetas.size();
-          partitionIndex++) {
-        PartitionMeta newPartitionMeta = newPartitionMetas.get(partitionIndex);
-        PartitionMeta oldPartitionMeta = oldPartitionMetas.get(partitionIndex);
-        if (newPartitionMeta.equals(oldPartitionMeta)) {
-          continue;
-        }
-        close.add(oldPartitionMeta);
-        open.add(newPartitionMeta);
-      }
-      for (; partitionIndex < newPartitionMetas.size(); partitionIndex++) {
-        close.add(null);
-        open.add(newPartitionMetas.get(partitionIndex));
-      }
-      for (; partitionIndex < oldPartitionMetas.size(); partitionIndex++) {
-        close.add(oldPartitionMetas.get(partitionIndex));
-        open.add(null);
-      }
-      if (open.size() == 0 && close.size() == 0) {
-        continue;
-      }
-      for (int i = 0; i < open.size(); i++) {
-        PartitionMeta closeMeta = close.get(i);
-        PartitionMeta openMeta = open.get(i);
-        futures.add(
-            controlNodeCnx
-                .closePartition(closeMeta)
-                .handle(
-                    (r, t) -> {
-                      if (t != null) {
-                        log.warn("close {} fail", closeMeta, t);
-                      }
-                      if (closeMeta != null) {
-                        topicPartitionMap.get(topic).remove(closeMeta.getPartition());
-                      }
-                      return controlNodeCnx.openPartition(openMeta);
-                    })
-                .thenCompose(f -> f)
-                .thenAccept(
-                    r -> {
-                      topicPartitionMap.get(topic).put(openMeta.getPartition(), openMeta);
-                    })
-                .exceptionally(
-                    t -> {
-                      topicPartitionMap.get(topic).remove(openMeta.getPartition());
-                      return null;
-                    }));
-      }
-    }
-    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    new Rebalance().run();
   }
 
   public void setNodeRegistry(NodeRegistry nodeRegistry) {
@@ -308,5 +208,166 @@ public class PartitionRegistryImpl
                 .collect(Collectors.toList())
                 .toArray(new CompletableFuture[0]))
         .get();
+  }
+
+  public void setBrokerContext(BrokerContext brokerContext) {
+    this.brokerContext = brokerContext;
+  }
+
+  class Rebalance implements Runnable {
+    private Map<Integer, List<PartitionMeta>> newTopicPartitionMap;
+    private List<NodeMeta> nodes;
+    private Set<NodeMeta> nodeSet;
+    private Map<NodeMeta, AtomicInteger> nodePartitionCount;
+
+    public Rebalance() {
+      newTopicPartitionMap = new HashMap<>();
+      nodes = new ArrayList<>(nodeRegistry.getAliveNodes());
+      nodeSet = new HashSet<>(nodes);
+      nodePartitionCount = new HashMap<>();
+      for (NodeMeta nodeMeta : nodes) {
+        nodePartitionCount.put(nodeMeta, new AtomicInteger());
+      }
+    }
+
+    @Override
+    public void run() {
+      rebalance0();
+    }
+
+    private void rebalance0() {
+      if (nodes.size() == 0) {
+        log.info("cannot find node in cluster, exit rebalance");
+        return;
+      }
+      fastAllocate();
+      closeOpen();
+    }
+
+    protected void fastAllocate() {
+      int partitionCount = 0;
+      for (TopicMeta topicMeta : topicMetas.values()) {
+        List<PartitionMeta> partitionMetas = new ArrayList<>(topicMeta.getPartitionNum());
+        for (int i = 0; i < topicMeta.getPartitionNum(); i++) {
+          int partition = i;
+          PartitionMeta partitionMeta =
+              Optional.ofNullable(topicPartitionMap.get(topicMeta.getId()))
+                  .map(m -> m.get(partition))
+                  .orElse(null);
+          if (partitionMeta == null
+              || !nodeSet.contains(Utils.partitionMeta2NodeMeta(partitionMeta))) {
+            partitionMeta =
+                chooseNode(
+                        PartitionMeta.newBuilder()
+                            .setTopicId(topicMeta.getId())
+                            .setTopic(topicIdMetaMap.get(topicMeta.getId()).getTopic())
+                            .setPartition(i),
+                        partitionCount)
+                    .build();
+          }
+          nodePartitionCount.get(Utils.partitionMeta2NodeMeta(partitionMeta)).incrementAndGet();
+          partitionCount++;
+          if (topicPartitionMap.containsKey(topicMeta.getId())
+              && topicPartitionMap.get(topicMeta.getId()).containsKey(i)) {}
+
+          partitionMetas.add(partitionMeta);
+        }
+        newTopicPartitionMap.put(topicMeta.getId(), partitionMetas);
+      }
+    }
+
+    protected PartitionMeta.Builder chooseNode(PartitionMeta.Builder meta, int partitionCount) {
+      NodeMeta nodeMeta = null;
+      if (nodes.size() == 1) {
+        nodeMeta = nodes.get(0);
+      }
+      if (nodeMeta == null) {
+        for (int i = partitionCount; i < partitionCount + nodes.size(); i++) {
+          NodeMeta node = nodes.get(i % nodes.size());
+          if (Objects.equals(node.getAddress(), brokerContext.getAddress())) {
+            continue;
+          }
+          if (((double) partitionCount + 1) / (nodes.size() - 1)
+              > nodePartitionCount.get(node).get()) {
+            nodeMeta = node;
+            break;
+          }
+        }
+      }
+      if (nodeMeta == null) {
+        nodeMeta = nodes.get(partitionCount % nodes.size());
+      }
+      meta.setAddress(nodeMeta.getAddress()).setEpoch(nodeMeta.getEpoch());
+      return meta;
+    }
+
+    protected void closeOpen() {
+      List<CompletableFuture<?>> futures = new LinkedList<>();
+      for (Integer topic : newTopicPartitionMap.keySet()) {
+        List<PartitionMeta> newPartitionMetas = newTopicPartitionMap.get(topic);
+        List<PartitionMeta> oldPartitionMetas =
+            new ArrayList<>(topicPartitionMap.get(topic).values());
+        List<PartitionMeta> open = new LinkedList<>();
+        List<PartitionMeta> close = new LinkedList<>();
+        int partitionIndex = 0;
+        for (;
+            partitionIndex < newPartitionMetas.size() && partitionIndex < oldPartitionMetas.size();
+            partitionIndex++) {
+          PartitionMeta newPartitionMeta = newPartitionMetas.get(partitionIndex);
+          PartitionMeta oldPartitionMeta = oldPartitionMetas.get(partitionIndex);
+          if (newPartitionMeta.equals(oldPartitionMeta)) {
+            continue;
+          }
+          if (nodeSet.contains(Utils.partitionMeta2NodeMeta(oldPartitionMeta))) {
+            close.add(oldPartitionMeta);
+          } else {
+            log.info("skip close partition {} cause of node down", oldPartitionMeta);
+            close.add(null);
+          }
+          open.add(newPartitionMeta);
+        }
+        for (; partitionIndex < newPartitionMetas.size(); partitionIndex++) {
+          close.add(null);
+          open.add(newPartitionMetas.get(partitionIndex));
+        }
+        for (; partitionIndex < oldPartitionMetas.size(); partitionIndex++) {
+          close.add(oldPartitionMetas.get(partitionIndex));
+          open.add(null);
+        }
+        if (open.size() == 0 && close.size() == 0) {
+          continue;
+        }
+        for (int i = 0; i < open.size(); i++) {
+          PartitionMeta closeMeta = close.get(i);
+          PartitionMeta openMeta = open.get(i);
+          futures.add(
+              controlNodeCnx
+                  .closePartition(closeMeta)
+                  .handle(
+                      (r, t) -> {
+                        if (t != null) {
+                          log.warn("close {} fail", closeMeta, t);
+                        }
+                        if (closeMeta != null) {
+                          topicPartitionMap.get(topic).remove(closeMeta.getPartition());
+                        }
+                        return controlNodeCnx.openPartition(openMeta);
+                      })
+                  .thenCompose(f -> f)
+                  .thenAccept(
+                      r -> {
+                        if (r == PartitionServiceProto.OpenResponse.Status.SUCCESS) {
+                          topicPartitionMap.get(topic).put(openMeta.getPartition(), openMeta);
+                        }
+                      })
+                  .exceptionally(
+                      t -> {
+                        topicPartitionMap.get(topic).remove(openMeta.getPartition());
+                        return null;
+                      }));
+        }
+      }
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    }
   }
 }
