@@ -17,31 +17,39 @@
 package org.superhx.linky.broker;
 
 import org.superhx.linky.broker.service.DataNodeCnx;
+import org.superhx.linky.service.proto.NodeMeta;
 
 public class BrokerContext {
-  private String address;
-  private long epoch;
   private String storePath;
   private DataNodeCnx dataNodeCnx;
+  private NodeMeta.Builder nodeMeta = NodeMeta.newBuilder();
 
   public String getAddress() {
-    return address;
+    return nodeMeta.getAddress();
   }
 
   public void setAddress(String address) {
-    this.address = address;
+    nodeMeta.setAddress(address);
   }
 
   public long getEpoch() {
-    return epoch;
+    return nodeMeta.getEpoch();
   }
 
   public void setEpoch(long epoch) {
-    this.epoch = epoch;
+    nodeMeta.setEpoch(epoch);
+  }
+
+  public NodeMeta.Status getNodeStatus() {
+    return nodeMeta.getStatus();
+  }
+
+  public void setNodeStatus(NodeMeta.Status nodeStatus) {
+    nodeMeta.setStatus(nodeStatus);
   }
 
   public String getStorePath() {
-    return System.getProperty("user.home") + "/linky/" + address;
+    return System.getProperty("user.home") + "/linky/" + getAddress();
   }
 
   public void setStorePath(String storePath) {
@@ -54,5 +62,13 @@ public class BrokerContext {
 
   public void setDataNodeCnx(DataNodeCnx dataNodeCnx) {
     this.dataNodeCnx = dataNodeCnx;
+  }
+
+  public NodeMeta getNodeMeta() {
+    return nodeMeta.build();
+  }
+
+  public void setNodeMeta(NodeMeta nodeMeta) {
+    this.nodeMeta = nodeMeta.toBuilder();
   }
 }

@@ -59,10 +59,20 @@ public class Utils {
     return String.format("%s/segments/%s/%s/%s/meta.json", basePath, topicId, partitionId, index);
   }
 
+
   public static void str2file(String str, String fileName) {
     try {
       ensureDirOK(new File(fileName).getParent());
       Files.write(str.getBytes(DEFAULT_CHARSET), new File(fileName));
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+
+  public static void byte2file(byte[] bytes, String fileName) {
+    try {
+      ensureDirOK(new File(fileName).getParent());
+      Files.write(bytes, new File(fileName));
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -107,6 +117,10 @@ public class Utils {
     if (meta == null) {
       return null;
     }
-    return NodeMeta.newBuilder().setAddress(meta.getAddress()).setEpoch(meta.getEpoch()).build();
+    return NodeMeta.newBuilder()
+        .setAddress(meta.getAddress())
+        .setEpoch(meta.getEpoch())
+        .setStatus(NodeMeta.Status.ONLINE)
+        .build();
   }
 }

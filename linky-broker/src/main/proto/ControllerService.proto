@@ -3,6 +3,7 @@ syntax = "proto3";
 package linky;
 
 import 'SegmentMeta.proto';
+import 'NodeMeta.proto';
 
 option java_package = "org.superhx.linky.service.proto";
 option java_multiple_files = false;
@@ -13,13 +14,12 @@ service ControllerService {
 }
 
 message HeartbeatRequest {
-    int64 epoch = 1;
-    string address = 2;
-    repeated SegmentMeta segments = 3;
+    NodeMeta node = 1;
+    repeated SegmentMeta segments = 2;
     message Wal {
         int32 index = 1;
     }
-    repeated Wal wals = 4;
+    repeated Wal wals = 3;
 }
 
 message HeartbeatResponse {

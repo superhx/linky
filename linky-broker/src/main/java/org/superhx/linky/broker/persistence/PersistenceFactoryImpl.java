@@ -20,7 +20,7 @@ import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-public class MemPersistenceFactory implements PersistenceFactory {
+public class PersistenceFactoryImpl implements PersistenceFactory {
   private LocalSegmentManager localSegmentManager;
   private WriteAheadLog writeAheadLog;
   private BrokerContext brokerContext;
@@ -34,7 +34,7 @@ public class MemPersistenceFactory implements PersistenceFactory {
 
   @Override
   public Segment newSegment(SegmentMeta segmentMeta) {
-    Segment segment = new LocalSegment(segmentMeta, newWriteAheadLog(), brokerContext, false);
+    Segment segment = new LocalSegment(segmentMeta, newWriteAheadLog(), brokerContext);
     return segment;
   }
 

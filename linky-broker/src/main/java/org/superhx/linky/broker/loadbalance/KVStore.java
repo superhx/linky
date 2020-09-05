@@ -22,11 +22,12 @@ import io.etcd.jetcd.KV;
 import io.etcd.jetcd.kv.GetResponse;
 import io.etcd.jetcd.kv.PutResponse;
 import io.etcd.jetcd.options.GetOption;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
 
 import java.util.concurrent.CompletableFuture;
 
-public class KVStore {
+public class KVStore implements Lifecycle {
   private String namespace = "/linky/";
   private Client client;
   private KV kvClient;
@@ -34,6 +35,13 @@ public class KVStore {
   public KVStore() {
     this.client = Client.builder().endpoints("http://localhost:2379").build();
     this.kvClient = this.client.getKVClient();
+  }
+
+  @Override
+  public void shutdown() {
+    if (this.client != null) {
+      this.client.close();
+    }
   }
 
   public CompletableFuture<PutResponse> put(String key, byte[] value) {

@@ -17,13 +17,14 @@
 package org.superhx.linky.broker.persistence;
 
 import io.grpc.stub.StreamObserver;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.concurrent.CompletableFuture;
 
-public interface Segment {
+public interface Segment extends Lifecycle {
   int FOLLOWER_MARK = 1 << 0;
   int SEAL_MARK = 1 << 1;
   int NO_INDEX = -1;
@@ -38,8 +39,10 @@ public interface Segment {
     throw new UnsupportedOperationException();
   }
 
-  default void syncCmd(SegmentServiceProto.SyncCmdRequest request, StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
-      throw new UnsupportedOperationException();
+  default void syncCmd(
+      SegmentServiceProto.SyncCmdRequest request,
+      StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
+    throw new UnsupportedOperationException();
   }
 
   default void sync(
@@ -111,46 +114,10 @@ public interface Segment {
       return offset;
     }
 
-    public void setOffset(long offset) {
-      this.offset = offset;
+    public Status getStatus() {
+      return this.status;
     }
   }
-  //
-  //  class ReplicateResult {
-  //
-  //    public enum Status {
-  //      SUCCESS,
-  //      RESET
-  //    }
-  //
-  //    private Status status = Status.SUCCESS;
-  //    private long confirmOffset;
-  //
-  //    public ReplicateResult(long confirmOffset) {
-  //      this.confirmOffset = confirmOffset;
-  //    }
-  //
-  //    public ReplicateResult(ReplicateResult.Status status, long confirmOffset) {
-  //        this.status = status;
-  //        this.confirmOffset = confirmOffset;
-  //    }
-  //
-  //    public long getConfirmOffset() {
-  //      return confirmOffset;
-  //    }
-  //
-  //    public void setConfirmOffset(long confirmOffset) {
-  //      this.confirmOffset = confirmOffset;
-  //    }
-  //
-  //    public Status status() {
-  //      return status;
-  //    }
-  //
-  //    public void setStatus(Status status) {
-  //      this.status = status;
-  //    }
-  //  }
 
   enum Status {
     WRITABLE,

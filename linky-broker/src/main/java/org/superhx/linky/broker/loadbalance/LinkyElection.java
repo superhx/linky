@@ -26,13 +26,15 @@ import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 
-public class LinkyElection {
+public class LinkyElection implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LinkyElection.class);
   private BrokerContext brokerContext;
   private Client client;
@@ -48,6 +50,11 @@ public class LinkyElection {
     this.client = Client.builder().endpoints("http://localhost:2379").build();
     lease = this.client.getLeaseClient();
     election = this.client.getElectionClient();
+  }
+
+  @Override
+  public void start() {
+    CountDownLatch latch = new CountDownLatch(1);
     lease
         .grant(10)
         .thenAccept(
@@ -83,6 +90,7 @@ public class LinkyElection {
                         }
                       }
                       leader = newLeader;
+                      latch.countDown();
                     }
 
                     @Override
@@ -96,11 +104,20 @@ public class LinkyElection {
                       electionName,
                       leaseId,
                       ByteSequence.from(brokerContext.getAddress(), Utils.DEFAULT_CHARSET))
-                  .thenAccept(
-                      c -> {
-                        log.info("campaign success {}", c);
-                      });
+                  .thenAccept(c -> log.info("campaign success {}", c));
             });
+    try {
+      latch.await();
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+  }
+
+  @Override
+  public void shutdown() {
+    if (this.client != null) {
+      this.client.close();
+    }
   }
 
   public void registerListener(LeaderChangeListener listener) {

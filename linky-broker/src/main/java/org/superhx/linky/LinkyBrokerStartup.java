@@ -21,84 +21,115 @@ import io.grpc.ServerBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.KeepAlive;
+import org.superhx.linky.broker.Lifecycle;
+import org.superhx.linky.broker.LinkyException;
 import org.superhx.linky.broker.loadbalance.*;
 import org.superhx.linky.broker.persistence.LocalSegmentManager;
-import org.superhx.linky.broker.persistence.MemPersistenceFactory;
-import org.superhx.linky.broker.persistence.PersistenceFactory;
+import org.superhx.linky.broker.persistence.PartitionManager;
+import org.superhx.linky.broker.persistence.PersistenceFactoryImpl;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.broker.service.PartitionService;
 import org.superhx.linky.broker.service.RecordService;
 import org.superhx.linky.broker.service.SegmentService;
-import org.superhx.linky.service.proto.ControllerServiceProto;
+import org.superhx.linky.service.proto.NodeMeta;
 
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
-public class LinkyBrokerStartup {
+public class LinkyBrokerStartup implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LinkyBrokerStartup.class);
   private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
-  Server server;
+  private List<Lifecycle> components = new ArrayList<>();
+  private Server server;
+  private BrokerContext brokerContext;
 
   public LinkyBrokerStartup() {
-    long epoch = System.currentTimeMillis();
-
     String port = System.getProperty("port", "9594");
-    BrokerContext brokerContext = new BrokerContext();
+    brokerContext = new BrokerContext();
     brokerContext.setAddress("127.0.0.1:" + port);
-    brokerContext.setEpoch(epoch);
+    brokerContext.setEpoch(System.currentTimeMillis());
+    brokerContext.setNodeStatus(NodeMeta.Status.INIT);
+
     log.info("broker {} startup", port);
 
+    LinkyElection election = new LinkyElection(brokerContext);
+    components.add(election);
+
+    DataNodeCnx dataNodeCnx = new DataNodeCnx();
+    PersistenceFactoryImpl persistenceFactory = new PersistenceFactoryImpl();
+    LocalSegmentManager localSegmentManager = new LocalSegmentManager();
+    components.add(localSegmentManager);
+    PartitionManager partitionManager = new PartitionManager();
+    components.add(partitionManager);
+
     KVStore kvStore = new KVStore();
+    components.add(kvStore);
+    ControlNodeCnx controlNodeCnx = new ControlNodeCnx();
+    components.add(controlNodeCnx);
+    PartitionRegistryImpl partitionRegistry = new PartitionRegistryImpl();
+    components.add(partitionRegistry);
+    SegmentRegistryImpl segmentRegistry = new SegmentRegistryImpl();
+    components.add(segmentRegistry);
+    NodeRegistryImpl nodeRegistry = new NodeRegistryImpl();
+    components.add(nodeRegistry);
+
+    KeepAlive keepAlive = new KeepAlive();
+    components.add(keepAlive);
 
     RecordService recordService = new RecordService();
     PartitionService partitionService = new PartitionService();
     SegmentService segmentService = new SegmentService();
-    DataNodeCnx dataNodeCnx = new DataNodeCnx();
-    LocalSegmentManager localSegmentManager = new LocalSegmentManager();
-    PersistenceFactory persistenceFactory = new MemPersistenceFactory();
+    ControllerService controllerService = new ControllerService();
 
-    recordService.setPartitionService(partitionService);
-    partitionService.setPersistenceFactory(persistenceFactory);
-    partitionService.setBrokerContext(brokerContext);
-    segmentService.setLocalSegmentManager(localSegmentManager);
-    localSegmentManager.setDataNodeCnx(dataNodeCnx);
-    localSegmentManager.setPersistenceFactory(persistenceFactory);
-    localSegmentManager.setBrokerContext(brokerContext);
-    ((MemPersistenceFactory) persistenceFactory).setBrokerContext(brokerContext);
-    ((MemPersistenceFactory) persistenceFactory).setLocalSegmentManager(localSegmentManager);
-    dataNodeCnx.setBrokerContext(brokerContext);
     brokerContext.setDataNodeCnx(dataNodeCnx);
 
-    localSegmentManager.init();
+    dataNodeCnx.setElection(election);
+    dataNodeCnx.setBrokerContext(brokerContext);
 
-    ControlNodeCnx controlNodeCnx = new ControlNodeCnx();
-    PartitionRegistry partitionRegistry = new PartitionRegistryImpl();
-    NodeRegistry nodeRegistry = new NodeRegistryImpl();
-    SegmentRegistryImpl segmentRegistry = new SegmentRegistryImpl();
-    ControllerService controllerService = new ControllerService();
-    ((PartitionRegistryImpl) partitionRegistry).setBrokerContext(brokerContext);
+    persistenceFactory.setBrokerContext(brokerContext);
+    persistenceFactory.setLocalSegmentManager(localSegmentManager);
 
-    LinkyElection election = new LinkyElection(brokerContext);
-    ((PartitionRegistryImpl) partitionRegistry).setControlNodeCnx(controlNodeCnx);
-    ((PartitionRegistryImpl) partitionRegistry).setNodeRegistry(nodeRegistry);
-    ((PartitionRegistryImpl) partitionRegistry).setSegmentRegistry(segmentRegistry);
-    ((PartitionRegistryImpl) partitionRegistry).setKvStore(kvStore);
+    localSegmentManager.setBrokerContext(brokerContext);
+    localSegmentManager.setDataNodeCnx(dataNodeCnx);
+    localSegmentManager.setPersistenceFactory(persistenceFactory);
+
+    partitionManager.setPersistenceFactory(persistenceFactory);
+
+    partitionRegistry.setNodeRegistry(nodeRegistry);
+    partitionRegistry.setBrokerContext(brokerContext);
+    partitionRegistry.setControlNodeCnx(controlNodeCnx);
+    partitionRegistry.setElection(election);
+    partitionRegistry.setKvStore(kvStore);
+
+    segmentRegistry.setElection(election);
+    segmentRegistry.setPartitionRegistry(partitionRegistry);
+    segmentRegistry.setKvStore(kvStore);
+    segmentRegistry.setBrokerContext(brokerContext);
     segmentRegistry.setControlNodeCnx(controlNodeCnx);
     segmentRegistry.setNodeRegistry(nodeRegistry);
-    segmentRegistry.setBrokerContext(brokerContext);
-    segmentRegistry.setKvStore(kvStore);
-    segmentRegistry.setPartitionRegistry(partitionRegistry);
-    segmentRegistry.setElection(election);
-    election.registerListener(segmentRegistry);
-    election.registerListener((PartitionRegistryImpl) partitionRegistry);
-    controllerService.setNodeRegistry(nodeRegistry);
-    controllerService.setSegmentRegistry(segmentRegistry);
-    ((PartitionRegistryImpl) partitionRegistry).setElection(election);
-    dataNodeCnx.setElection(election);
 
-    segmentRegistry.init();
+    recordService.setPartitionManager(partitionManager);
+
+    partitionService.setBrokerContext(brokerContext);
+    partitionService.setPartitionManager(partitionManager);
+
+    segmentService.setLocalSegmentManager(localSegmentManager);
+
+    controllerService.setSegmentRegistry(segmentRegistry);
+    controllerService.setNodeRegistry(nodeRegistry);
+
+    keepAlive.setBrokerContext(brokerContext);
+    keepAlive.setDataNodeCnx(dataNodeCnx);
+    keepAlive.setLocalSegmentManager(localSegmentManager);
+
+    election.registerListener(segmentRegistry);
+    election.registerListener(partitionRegistry);
+
+    partitionRegistry.createTopic("FOO", 1, 2);
 
     server =
         ServerBuilder.forPort(Integer.valueOf(port))
@@ -108,34 +139,52 @@ public class LinkyBrokerStartup {
             .addService(controllerService)
             .addService(segmentRegistry)
             .build();
-
-    partitionRegistry.start();
-    partitionRegistry.createTopic("FOO", 2, 3);
-
-    schedule.scheduleWithFixedDelay(
-        () -> {
-          localSegmentManager.getLocalSegments();
-          ControllerServiceProto.HeartbeatRequest heartbeatRequest =
-              ControllerServiceProto.HeartbeatRequest.newBuilder()
-                  .setAddress(brokerContext.getAddress())
-                  .setEpoch(epoch)
-                  .addAllSegments(localSegmentManager.getLocalSegments())
-                  .build();
-          dataNodeCnx.keepalive(heartbeatRequest);
-        },
-        1000,
-        1000,
-        TimeUnit.MILLISECONDS);
   }
 
-  public void start() throws IOException, InterruptedException {
-    server.start();
-    server.awaitTermination();
+  @Override
+  public void init() {
+    for (Lifecycle component : components) {
+      component.init();
+    }
   }
 
-  public static void main(String... args) throws IOException, InterruptedException {
+  @Override
+  public void start() {
+    try {
+      server.start();
+      for (Lifecycle component : components) {
+        component.start();
+      }
+      brokerContext.setNodeStatus(NodeMeta.Status.ONLINE);
+    } catch (Throwable e) {
+      throw new LinkyException(e);
+    }
+  }
+
+  @Override
+  public void shutdown() {
+    brokerContext.setNodeStatus(NodeMeta.Status.TAINT);
+    try {
+      Thread.sleep(10000);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+
+    List<Lifecycle> components = new ArrayList<>(this.components);
+    Collections.reverse(components);
+    for (Lifecycle component : components) {
+      component.shutdown();
+    }
+    brokerContext.setNodeStatus(NodeMeta.Status.OFFLINE);
+  }
+
+  public static void main(String... args) {
 
     System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "debug");
-    new LinkyBrokerStartup().start();
+    LinkyBrokerStartup broker = new LinkyBrokerStartup();
+    broker.init();
+    broker.start();
+
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> broker.shutdown()));
   }
 }

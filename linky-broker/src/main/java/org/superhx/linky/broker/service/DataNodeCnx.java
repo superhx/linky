@@ -22,7 +22,6 @@ import io.grpc.stub.StreamObserver;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.loadbalance.LinkyElection;
-import org.superhx.linky.broker.persistence.LocalSegmentManager;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceGrpc;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
@@ -36,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class DataNodeCnx {
-  private LocalSegmentManager localSegmentManager;
   private BrokerContext brokerContext;
   private Map<String, Channel> channels = new ConcurrentHashMap<>();
   private LinkyElection election;

@@ -15,4 +15,13 @@ message PartitionMeta {
     int32 partition = 3;
     string address = 4;
     int64 epoch = 5;
+    enum Status {
+        NOOP = 0;
+        OPENING = 1;
+        OPEN = 2;
+        SHUTTING = 3;
+        SHUTDOWN = 4;
+        ERROR = 5;
+    }
 }
+

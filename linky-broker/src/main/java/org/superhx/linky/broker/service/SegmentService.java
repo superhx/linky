@@ -25,7 +25,6 @@ import org.superhx.linky.data.service.proto.SegmentServiceProto;
 public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
 
   private LocalSegmentManager localSegmentManager;
-  private DataNodeCnx dataNodeCnx;
 
   public SegmentService() {}
 
@@ -144,9 +143,5 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
-  }
-
-  public void setDataNodeCnx(DataNodeCnx dataNodeCnx) {
-    this.dataNodeCnx = dataNodeCnx;
   }
 }

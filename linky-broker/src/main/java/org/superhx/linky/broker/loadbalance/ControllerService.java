@@ -19,7 +19,6 @@ package org.superhx.linky.broker.loadbalance;
 import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.ControllerServiceGrpc;
 import org.superhx.linky.service.proto.ControllerServiceProto;
-import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 public class ControllerService extends ControllerServiceGrpc.ControllerServiceImplBase {
@@ -31,7 +30,7 @@ public class ControllerService extends ControllerServiceGrpc.ControllerServiceIm
       ControllerServiceProto.HeartbeatRequest request,
       StreamObserver<ControllerServiceProto.HeartbeatResponse> responseObserver) {
     nodeRegistry
-        .register(NodeMeta.newBuilder().setAddress(request.getAddress()).setEpoch(request.getEpoch()).build())
+        .register(request.getNode())
         .thenAccept(
             r -> {
               responseObserver.onNext(

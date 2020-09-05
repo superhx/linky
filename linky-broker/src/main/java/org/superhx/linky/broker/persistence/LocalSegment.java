@@ -23,6 +23,8 @@ import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Lifecycle;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
@@ -67,11 +69,12 @@ public class LocalSegment implements Segment {
   private MappedFiles mappedFiles;
   private Set<String> failedReplicas = new CopyOnWriteArraySet<>();
   boolean sinking = false;
+  private ScheduledFuture<?> followerScanner;
 
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
 
-  public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext, boolean recover) {
+  public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext) {
     this.storePath =
         String.format(
             "%s/segments/%s/%s/%s",
@@ -114,26 +117,39 @@ public class LocalSegment implements Segment {
       break;
     }
 
-    if (!recover) {
-        initReplicator();
-    }
+    initReplicator();
 
-    scheduler.scheduleWithFixedDelay(
-        () -> {
-            if ((meta.getFlag() & SEAL_MARK) != 0) {
-              return;
-            }
-          for (Follower follower : followers) {
-            if (!follower.isBroken()) {
-              continue;
-            }
-            followers.add(new Follower(follower.followerAddress, NO_OFFSET));
-            followers.remove(follower);
-          }
-        },
-        30,
-        30,
-        TimeUnit.SECONDS);
+    followerScanner =
+        scheduler.scheduleWithFixedDelay(
+            () -> {
+              if ((meta.getFlag() & SEAL_MARK) != 0) {
+                return;
+              }
+              for (Follower follower : followers) {
+                if (!follower.isBroken()) {
+                  continue;
+                }
+                followers.add(new Follower(follower.followerAddress, NO_OFFSET));
+                followers.remove(follower);
+              }
+            },
+            30,
+            30,
+            TimeUnit.SECONDS);
+  }
+
+  @Override
+  public void shutdown() {
+    if (followerScanner != null) {
+      followerScanner.cancel(false);
+      try {
+        followerScanner.get();
+      } catch (Exception e) {
+      }
+    }
+    for (Follower follower : followers) {
+      follower.shutdown();
+    }
   }
 
   private void initReplicator() {
@@ -271,7 +287,7 @@ public class LocalSegment implements Segment {
     }
     sinking = true;
     this.status = Status.READONLY;
-    this.meta.setFlag(this.meta.getFlag() & SEAL_MARK);
+    this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
     dataNodeCnx
         .getSegmentServiceStub(request.getAddress())
         .sync(
@@ -286,12 +302,18 @@ public class LocalSegment implements Segment {
               public void onNext(SegmentServiceProto.SyncResponse syncResponse) {
                 BatchRecord batchRecord = syncResponse.getBatchRecord();
                 if (nextOffset.get() != batchRecord.getFirstOffset()) {
+                  log.info("sync sink not equal expect {} but {}", nextOffset.get(), batchRecord);
                   log.info("sync sink not equal {}", batchRecord);
+                  responseObserver.onError(
+                      new LinkyIOException(
+                          String.format(
+                              "sync sink not match expect %s but %s",
+                              nextOffset.get(), batchRecord)));
                   return;
                 }
                 log.info("sync sink {}", batchRecord);
                 nextOffset.addAndGet(batchRecord.getRecordsCount());
-                long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount()) - 1;
+                long replicaConfirmOffset = nextOffset.get() - 1;
                 wal.append(batchRecord)
                     .thenAccept(
                         r -> {
@@ -341,9 +363,10 @@ public class LocalSegment implements Segment {
                                       .build())));
     }
     lastReplicator
-        .thenAccept(n -> {
-          responseObserver.onCompleted();
-        })
+        .thenAccept(
+            n -> {
+              responseObserver.onCompleted();
+            })
         .exceptionally(
             t -> {
               responseObserver.onError(t);
@@ -423,7 +446,7 @@ public class LocalSegment implements Segment {
             r -> {
               this.endOffset = this.confirmOffset + 1;
               this.meta.setEndOffset(endOffset);
-              this.meta.setFlag(this.meta.getFlag() & SEAL_MARK);
+              this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
               try {
                 Utils.str2file(
                     JsonFormat.printer().print(this.meta),
@@ -499,7 +522,7 @@ public class LocalSegment implements Segment {
     FOLLOWER
   }
 
-  class Follower implements StreamObserver<SegmentServiceProto.ReplicateResponse> {
+  class Follower implements StreamObserver<SegmentServiceProto.ReplicateResponse>, Lifecycle {
     private long expectedNextOffset;
     private long confirmOffset = NO_OFFSET;
     private String followerAddress;
@@ -522,6 +545,13 @@ public class LocalSegment implements Segment {
                         .setFirstOffset(NO_OFFSET)
                         .build())
                 .build());
+      }
+    }
+
+    @Override
+    public void shutdown() {
+      if (follower != null) {
+        follower.onCompleted();
       }
     }
 

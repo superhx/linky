@@ -16,10 +16,10 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import java.util.concurrent.CompletableFuture;
-
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
+
+import java.util.concurrent.CompletableFuture;
 
 public interface Partition {
 
@@ -64,12 +64,12 @@ public interface Partition {
                  SUCCESS;
     }
 
-    enum PartitionStatus {
-        NOOP,
-        OPENING,
-        OPEN,
-        SHUTTING,
-        SHUTDOWN,
-        ERROR
-    }
+  enum PartitionStatus {
+    NOOP,
+    OPENING,
+    OPEN,
+    SHUTTING,
+    SHUTDOWN,
+    ERROR
+  }
 }

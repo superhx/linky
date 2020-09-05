@@ -18,10 +18,12 @@ package org.superhx.linky.broker.loadbalance;
 
 import com.google.common.base.Strings;
 import io.grpc.Channel;
+import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.PartitionMeta;
@@ -29,15 +31,21 @@ import org.superhx.linky.service.proto.PartitionServiceGrpc;
 import org.superhx.linky.service.proto.PartitionServiceProto;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public class ControlNodeCnx {
+public class ControlNodeCnx implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(ControllerService.class);
-  private Map<String, Channel> channels = new ConcurrentHashMap<>();
+  private Map<String, ManagedChannel> channels = new ConcurrentHashMap<>();
+
+  @Override
+  public void shutdown() {
+    for (ManagedChannel channel : channels.values()) {
+      channel.shutdown();
+    }
+  }
 
   public CompletableFuture<Void> closePartition(PartitionMeta partitionMeta) {
     if (partitionMeta == null) {
@@ -69,7 +77,8 @@ public class ControlNodeCnx {
     return future;
   }
 
-  public CompletableFuture<PartitionServiceProto.OpenResponse.Status> openPartition(PartitionMeta partitionMeta) {
+  public CompletableFuture<PartitionServiceProto.OpenResponse.Status> openPartition(
+      PartitionMeta partitionMeta) {
     if (partitionMeta == null) {
       return CompletableFuture.completedFuture(null);
     }
@@ -133,7 +142,8 @@ public class ControlNodeCnx {
             .toArray(new CompletableFuture[0]));
   }
 
-  public CompletableFuture<PartitionServiceProto.StatusResponse> getPartitionStatus(String address) {
+  public CompletableFuture<PartitionServiceProto.StatusResponse> getPartitionStatus(
+      String address) {
     CompletableFuture<PartitionServiceProto.StatusResponse> future = new CompletableFuture<>();
     getPartitionServiceStub(address)
         .status(
@@ -166,7 +176,7 @@ public class ControlNodeCnx {
   }
 
   private Channel getChannel(String address) {
-    Channel channel = channels.get(address);
+    ManagedChannel channel = channels.get(address);
     if (channel != null) {
       return channel;
     }

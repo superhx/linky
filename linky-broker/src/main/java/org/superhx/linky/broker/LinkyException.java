@@ -16,10 +16,12 @@
  */
 package org.superhx.linky.broker;
 
-public interface Lifecycle {
-  default void init() {}
+public class LinkyException extends RuntimeException {
+    public LinkyException(Throwable cause) {
+        super(cause);
+    }
 
-  default void start() {}
-
-  default void shutdown() {}
+    public LinkyException(String message) {
+        super(message);
+    }
 }

@@ -20,6 +20,7 @@ import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.persistence.Segment;
@@ -37,11 +38,11 @@ import java.util.stream.Collectors;
 import static org.superhx.linky.broker.persistence.Segment.*;
 
 public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManagerServiceImplBase
-    implements SegmentRegistry, LinkyElection.LeaderChangeListener {
+    implements SegmentRegistry, Lifecycle, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(SegmentRegistryImpl.class);
   private static final long KEEPALIVE = TimeUnit.SECONDS.toMillis(10);
   private Map<SegmentKey, SegmentMeta.Builder> segments = null;
-  private Map<SegmentReplicaKey, Timestamped<SegmentMeta>> aliveSegments =
+  private Map<SegmentKey, Map<String, Timestamped<SegmentMeta>>> aliveSegments =
       new ConcurrentHashMap<>();
   private Set<SegmentReplicaKey> syncing = new CopyOnWriteArraySet<>();
 
@@ -128,7 +129,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                 .collect(Collectors.toSet());
         SegmentMeta.Builder replicaSegment = onlineSegment.toBuilder().clearReplicas();
         for (int i = onlineSegment.getReplicasCount();
-            i < partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
+            i <= partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
             i++) {
           for (NodeMeta nodeMeta : nodeMetas) {
             if (replicas.contains(nodeMeta.getAddress())) {
@@ -141,21 +142,13 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                     .build());
             replicas.add(nodeMeta.getAddress());
           }
-          if (replicaSegment.getReplicaNum() != 0) {
+          if (replicaSegment.getReplicasList().size() != 0) {
             log.info("enough replica {}", replicaSegment);
             controlNodeCnx
                 .createSegment(replicaSegment.build())
                 .thenAccept(
                     nil -> {
-                      for (SegmentMeta.Replica replica : replicaSegment.getReplicasList()) {
-                        aliveSegments.putIfAbsent(
-                            new SegmentReplicaKey(
-                                onlineSegment.getTopicId(),
-                                onlineSegment.getPartition(),
-                                onlineSegment.getIndex(),
-                                replica.getAddress()),
-                            new Timestamped<>(replicaSegment.build()));
-                      }
+                      register(replicaSegment.build());
                     });
           }
         }
@@ -174,21 +167,15 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   }
 
   private SegmentMeta getAliveSegmentMeta0(SegmentMeta.Builder meta, long timeout) {
-    List<SegmentMeta.Replica> replicas = new LinkedList<>();
-    for (SegmentMeta.Replica replica : meta.getReplicasList()) {
-      SegmentReplicaKey segmentReplicaKey =
-          new SegmentReplicaKey(
-              meta.getTopicId(), meta.getPartition(), meta.getIndex(), replica.getAddress());
-      Timestamped<SegmentMeta> timestamped = aliveSegments.get(segmentReplicaKey);
-      if (timestamped == null) {
-        continue;
-      }
-      if (timestamped.getTimestamp() + timeout < System.currentTimeMillis()) {
-        continue;
-      }
-      replicas.add(timestamped.getData().getReplicas(0));
+    SegmentKey key = new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
+    Map<String, Timestamped<SegmentMeta>> map = aliveSegments.get(key);
+    SegmentMeta.Builder aliveMeta = meta.clone().clearReplicas();
+    if (map != null) {
+      map.values().stream()
+          .filter(t -> t.getTimestamp() + timeout > System.currentTimeMillis())
+          .forEach(t -> aliveMeta.addReplicas(t.getData().getReplicas(0)));
     }
-    return meta.clone().clearReplicas().addAllReplicas(replicas).build();
+    return aliveMeta.build();
   }
 
   private Map<SegmentKey, SegmentMeta.Builder> loadSegments() {
@@ -221,14 +208,17 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   @Override
   public void register(SegmentMeta segment) {
     checkLeadership();
+    SegmentKey key =
+        new SegmentKey(segment.getTopicId(), segment.getPartition(), segment.getIndex());
     for (SegmentMeta.Replica replica : segment.getReplicasList()) {
-      SegmentReplicaKey key =
-          new SegmentReplicaKey(
-              segment.getTopicId(),
-              segment.getPartition(),
-              segment.getIndex(),
-              replica.getAddress());
-      aliveSegments.put(key, new Timestamped<>(segment));
+      Map<String, Timestamped<SegmentMeta>> map = aliveSegments.get(key);
+      if (map == null) {
+        aliveSegments.putIfAbsent(key, new ConcurrentHashMap<>());
+        map = aliveSegments.get(key);
+      }
+      map.put(
+          replica.getAddress(),
+          new Timestamped<>(segment.toBuilder().clearReplicas().addReplicas(replica).build()));
     }
   }
 

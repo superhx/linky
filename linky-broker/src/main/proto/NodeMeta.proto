@@ -11,4 +11,11 @@ option java_outer_classname = "NodeMetaProto";
 message NodeMeta {
     string address = 1;
     int64 epoch = 2;
+    enum Status {
+        INIT = 0;
+        ONLINE = 1;
+        TAINT = 2;
+        OFFLINE = 3;
+    }
+    Status status = 3;
 }

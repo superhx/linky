@@ -20,6 +20,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
@@ -32,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 public class PartitionRegistryImpl
-    implements PartitionRegistry, LinkyElection.LeaderChangeListener {
+    implements PartitionRegistry, Lifecycle, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(PartitionRegistryImpl.class);
   private AtomicInteger topicIdCounter = new AtomicInteger();
   private Map<Integer, TopicMeta> topicIdMetaMap = new ConcurrentHashMap<>();
@@ -41,14 +42,19 @@ public class PartitionRegistryImpl
   private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
 
   private NodeRegistry nodeRegistry;
-  private SegmentRegistry segmentRegistry;
   private ControlNodeCnx controlNodeCnx;
   private LinkyElection election;
   private KVStore kvStore;
   private BrokerContext brokerContext;
 
+  @Override
   public void start() {
     schedule.scheduleWithFixedDelay(() -> rebalance(), 1000, 5000, TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public void shutdown() {
+    schedule.shutdown();
   }
 
   @Override
@@ -110,10 +116,6 @@ public class PartitionRegistryImpl
 
   public void setNodeRegistry(NodeRegistry nodeRegistry) {
     this.nodeRegistry = nodeRegistry;
-  }
-
-  public void setSegmentRegistry(SegmentRegistry segmentRegistry) {
-    this.segmentRegistry = segmentRegistry;
   }
 
   public void setControlNodeCnx(ControlNodeCnx controlNodeCnx) {

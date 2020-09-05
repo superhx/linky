@@ -17,12 +17,11 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.common.io.Files;
-import com.google.gson.Gson;
-import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.loadbalance.SegmentKey;
 import org.superhx.linky.broker.service.DataNodeCnx;
@@ -37,7 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public class LocalSegmentManager {
+public class LocalSegmentManager implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private Map<SegmentKey, Segment> segments = new ConcurrentHashMap<>();
 
@@ -45,8 +44,7 @@ public class LocalSegmentManager {
   private DataNodeCnx dataNodeCnx;
   private BrokerContext brokerContext;
 
-  public LocalSegmentManager() {}
-
+  @Override
   public void init() {
     String segmentsDir = this.brokerContext.getStorePath() + "/segments";
     Utils.ensureDirOK(segmentsDir);
@@ -78,31 +76,31 @@ public class LocalSegmentManager {
             segments.put(
                 new SegmentKey(topicId, partitionId, segmentIndex),
                 new LocalSegment(
-                    segmentMeta, persistenceFactory.newWriteAheadLog(), brokerContext, true));
+                    segmentMeta, persistenceFactory.newWriteAheadLog(), brokerContext));
           } catch (IOException e) {
             continue;
           }
         }
       }
     }
-    System.out.println(new Gson().toJson(segments.keySet()));
   }
 
   public CompletableFuture<Void> createSegment(SegmentMeta meta) {
-    try {
-      String json = JsonFormat.printer().print(meta.toBuilder().clearReplicas());
-      Utils.str2file(
-          json,
-          Utils.getSegmentMetaPath(
-              this.brokerContext.getStorePath(),
-              meta.getTopicId(),
-              meta.getPartition(),
-              meta.getIndex()));
-    } catch (InvalidProtocolBufferException e) {
-      e.printStackTrace();
+    SegmentKey key = new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
+    Segment segment = segments.get(key);
+    if (segment != null) {
+      log.info("shutdown old local segment {}", meta);
+      segment.shutdown();
     }
-    Segment segment = persistenceFactory.newSegment(meta);
-    segments.put(new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex()), segment);
+    Utils.byte2file(
+        Utils.pb2jsonBytes(meta.toBuilder().clearReplicas()),
+        Utils.getSegmentMetaPath(
+            this.brokerContext.getStorePath(),
+            meta.getTopicId(),
+            meta.getPartition(),
+            meta.getIndex()));
+    segment = persistenceFactory.newSegment(meta);
+    segments.put(key, segment);
     log.info("create local segment {}", meta);
     return CompletableFuture.completedFuture(null);
   }

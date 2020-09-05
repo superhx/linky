@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.loadbalance;
 
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.service.proto.NodeMeta;
 
 import java.util.ArrayList;
@@ -25,7 +26,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public class NodeRegistryImpl implements NodeRegistry {
+public class NodeRegistryImpl implements NodeRegistry, Lifecycle {
   private Map<String, Timestamped<NodeMeta>> nodeMap = new ConcurrentHashMap<>();
   private static final long TIMEOUT = 5_000;
 
@@ -42,6 +43,7 @@ public class NodeRegistryImpl implements NodeRegistry {
         nodeMap.values().stream()
             .filter(t -> (System.currentTimeMillis() - t.getTimestamp()) < TIMEOUT)
             .map(n -> n.getData())
+            .filter(n -> n.getStatus() == NodeMeta.Status.ONLINE)
             .collect(Collectors.toList()));
     return nodes;
   }

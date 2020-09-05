@@ -20,15 +20,16 @@ import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.persistence.Partition;
+import org.superhx.linky.broker.persistence.PartitionManager;
 import org.superhx.linky.service.proto.*;
 
 public class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
   private static final Logger log = LoggerFactory.getLogger(RecordService.class);
-  private PartitionService partitionService;
+  private PartitionManager partitionManager;
 
   @Override
   public void put(PutRequest request, StreamObserver<PutResponse> responseObserver) {
-    Partition partition = partitionService.getPartition(request.getTopic(), request.getPartition());
+    Partition partition = partitionManager.getPartition(request.getTopic(), request.getPartition());
     partition
         .append(request.getBatchRecord())
         .thenAccept(
@@ -51,7 +52,7 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
 
   @Override
   public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
-    Partition partition = partitionService.getPartition(request.getTopic(), request.getPartition());
+    Partition partition = partitionManager.getPartition(request.getTopic(), request.getPartition());
     partition
         .get(request.getOffset())
         .thenAccept(
@@ -68,7 +69,7 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase {
             });
   }
 
-  public void setPartitionService(PartitionService partitionService) {
-    this.partitionService = partitionService;
+  public void setPartitionManager(PartitionManager partitionManager) {
+    this.partitionManager = partitionManager;
   }
 }
