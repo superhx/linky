@@ -35,7 +35,6 @@ import org.superhx.linky.service.proto.SegmentMeta;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -50,6 +49,7 @@ public class LocalSegment implements Segment {
   private int topic;
   private int partition;
   private int index;
+  private final String segmentId;
   private long startOffset = NO_OFFSET;
   private AtomicLong nextOffset;
   private Status status = Status.WRITABLE;
@@ -67,7 +67,6 @@ public class LocalSegment implements Segment {
   private DataNodeCnx dataNodeCnx;
   private String storePath;
   private MappedFiles mappedFiles;
-  private Set<String> failedReplicas = new CopyOnWriteArraySet<>();
   boolean sinking = false;
   private ScheduledFuture<?> followerScanner;
 
@@ -100,14 +99,16 @@ public class LocalSegment implements Segment {
     this.topic = meta.getTopicId();
     this.partition = meta.getPartition();
     this.index = meta.getIndex();
+    this.segmentId =
+        String.format("%s-%s-%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
     this.wal = wal;
 
     this.brokerContext = brokerContext;
     this.dataNodeCnx = brokerContext.getDataNodeCnx();
     this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
-    this.confirmOffset = this.startOffset + mappedFiles.getConfirmOffset() / INDEX_UNIT_SIZE - 1;
-    this.nextOffset.set(confirmOffset + 1);
+    this.confirmOffset = this.startOffset + mappedFiles.getConfirmOffset() / INDEX_UNIT_SIZE;
+    this.nextOffset.set(confirmOffset);
 
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
       if (!brokerContext.getAddress().equals(replica.getAddress())) {
@@ -125,6 +126,9 @@ public class LocalSegment implements Segment {
               if ((meta.getFlag() & SEAL_MARK) != 0) {
                 return;
               }
+              if (status != Status.WRITABLE) {
+                return;
+              }
               for (Follower follower : followers) {
                 if (!follower.isBroken()) {
                   continue;
@@ -139,6 +143,16 @@ public class LocalSegment implements Segment {
   }
 
   @Override
+  public void init() {
+    mappedFiles.init();
+  }
+
+  @Override
+  public void start() {
+    mappedFiles.start();
+  }
+
+  @Override
   public void shutdown() {
     if (followerScanner != null) {
       followerScanner.cancel(false);
@@ -150,6 +164,7 @@ public class LocalSegment implements Segment {
     for (Follower follower : followers) {
       follower.shutdown();
     }
+    mappedFiles.shutdown();
   }
 
   private void initReplicator() {
@@ -171,7 +186,7 @@ public class LocalSegment implements Segment {
   }
 
   @Override
-  public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
+  public synchronized CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
     CompletableFuture<AppendResult> rst = new CompletableFuture<>();
     if (this.status == Status.READONLY) {
       rst.completeExceptionally(new StoreException());
@@ -190,7 +205,7 @@ public class LocalSegment implements Segment {
               .setSegmentIndex(index)
               .build();
 
-      CompletableFuture<WriteAheadLog.AppendResult> walFuture = wal.append(batchRecord);
+      WriteAheadLog.AppendResult walFuture = wal.append(batchRecord);
       waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(offset)));
 
       SegmentServiceProto.ReplicateRequest replicateRequest =
@@ -201,15 +216,9 @@ public class LocalSegment implements Segment {
 
       walFuture.thenAccept(
           r -> {
-            this.confirmOffset = offset + recordsCount - 1;
+            this.confirmOffset = offset + recordsCount;
             checkWaiting();
-            ByteBuffer index = ByteBuffer.allocate(12);
-            index.putLong(r.getOffset());
-            index.putInt(r.getSize());
-            index.flip();
-            mappedFiles.write(index);
           });
-
       return rst;
     } catch (Throwable t) {
       log.error("append fail unexpect ex", t);
@@ -219,49 +228,50 @@ public class LocalSegment implements Segment {
   }
 
   @Override
-  public CompletableFuture<SegmentServiceProto.ReplicateResponse> replicate(
-      SegmentServiceProto.ReplicateRequest request) {
+  public synchronized void replicate(
+      SegmentServiceProto.ReplicateRequest request,
+      StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
     CompletableFuture<SegmentServiceProto.ReplicateResponse> rst = new CompletableFuture<>();
     if (this.status == Status.READONLY) {
       rst.completeExceptionally(new StoreException());
-      return rst;
+      responseObserver.onError(new LinkyIOException("Segment READONLY"));
+      return;
     }
     BatchRecord batchRecord = request.getBatchRecord();
     log.info("replica {}", batchRecord);
 
     if (nextOffset.get() != batchRecord.getFirstOffset()) {
       log.info("need reset to {}", nextOffset.get());
-      return CompletableFuture.completedFuture(
+      responseObserver.onNext(
           SegmentServiceProto.ReplicateResponse.newBuilder()
               .setStatus(SegmentServiceProto.ReplicateResponse.Status.RESET)
-              .setConfirmOffset(nextOffset.get() - 1)
+              .setWriteOffset(nextOffset.get())
+              .setConfirmOffset(confirmOffset)
               .build());
+      return;
     }
 
     if (startOffset == NO_OFFSET) {
       setStartOffset(batchRecord.getFirstOffset());
     }
-    long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount()) - 1;
+    long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
 
-    waitConfirmRequests.add(
-        new Waiting(
-            replicaConfirmOffset,
-            rst,
-            SegmentServiceProto.ReplicateResponse.newBuilder()
-                .setConfirmOffset(replicaConfirmOffset)
-                .build()));
     wal.append(batchRecord)
         .thenAccept(
             r -> {
               this.confirmOffset = replicaConfirmOffset;
-              checkWaiting();
-              ByteBuffer index = ByteBuffer.allocate(12);
-              index.putLong(r.getOffset());
-              index.putInt(r.getSize());
-              index.flip();
-              mappedFiles.write(index);
+              replicateResponse(responseObserver);
             });
-    return rst;
+    replicateResponse(responseObserver);
+  }
+
+  protected synchronized void replicateResponse(
+      StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
+    responseObserver.onNext(
+        SegmentServiceProto.ReplicateResponse.newBuilder()
+            .setConfirmOffset(confirmOffset)
+            .setWriteOffset(nextOffset.get())
+            .build());
   }
 
   @Override
@@ -274,6 +284,23 @@ public class LocalSegment implements Segment {
               int size = index.getInt();
               return wal.get(physicalOffset, size);
             });
+  }
+
+  @Override
+  public void putIndex(Index index) {
+    long expectNextOffset = this.startOffset + mappedFiles.getWriteOffset() / INDEX_UNIT_SIZE;
+    if (expectNextOffset != index.getOffset()) {
+      log.warn("{} {} not match expect nextOffset {}", segmentId, index, expectNextOffset);
+      return;
+    }
+    if (log.isDebugEnabled()) {
+      log.debug("put {} {}", segmentId, index);
+    }
+    ByteBuffer buf = ByteBuffer.allocate(12);
+    buf.putLong(index.getPhysicalOffset());
+    buf.putInt(index.getSize());
+    buf.flip();
+    mappedFiles.append(buf);
   }
 
   @Override
@@ -295,7 +322,7 @@ public class LocalSegment implements Segment {
                 .setTopicId(topic)
                 .setPartition(partition)
                 .setIndex(index)
-                .setStartOffset(this.confirmOffset + 1)
+                .setStartOffset(nextOffset.get())
                 .build(),
             new StreamObserver<SegmentServiceProto.SyncResponse>() {
               @Override
@@ -312,18 +339,9 @@ public class LocalSegment implements Segment {
                   return;
                 }
                 log.info("sync sink {}", batchRecord);
-                nextOffset.addAndGet(batchRecord.getRecordsCount());
-                long replicaConfirmOffset = nextOffset.get() - 1;
+                long confirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
                 wal.append(batchRecord)
-                    .thenAccept(
-                        r -> {
-                          LocalSegment.this.confirmOffset = replicaConfirmOffset;
-                          ByteBuffer index = ByteBuffer.allocate(12);
-                          index.putLong(r.getOffset());
-                          index.putInt(r.getSize());
-                          index.flip();
-                          mappedFiles.write(index);
-                        });
+                    .thenAccept(r -> LocalSegment.this.confirmOffset = confirmOffset);
               }
 
               @Override
@@ -348,7 +366,7 @@ public class LocalSegment implements Segment {
       StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
     CompletableFuture<Void> lastReplicator = CompletableFuture.completedFuture(null);
     for (long offset = request.getStartOffset();
-        offset <= LocalSegment.this.confirmOffset;
+        offset < LocalSegment.this.confirmOffset;
         offset++) {
       long finalOffset = offset;
       lastReplicator =
@@ -363,15 +381,17 @@ public class LocalSegment implements Segment {
                                       .build())));
     }
     lastReplicator
-        .thenAccept(
-            n -> {
-              responseObserver.onCompleted();
-            })
+        .thenAccept(n -> responseObserver.onCompleted())
         .exceptionally(
             t -> {
               responseObserver.onError(t);
               return null;
             });
+  }
+
+  @Override
+  public void forceIndex() {
+    mappedFiles.force();
   }
 
   @Override
@@ -388,7 +408,7 @@ public class LocalSegment implements Segment {
   public void setStartOffset(long offset) {
     this.startOffset = offset;
     this.nextOffset = new AtomicLong(this.startOffset);
-    this.confirmOffset = this.startOffset - 1;
+    this.confirmOffset = this.startOffset;
   }
 
   @Override
@@ -444,7 +464,7 @@ public class LocalSegment implements Segment {
                 .toArray(new CompletableFuture[0]))
         .thenAccept(
             r -> {
-              this.endOffset = this.confirmOffset + 1;
+              this.endOffset = this.confirmOffset;
               this.meta.setEndOffset(endOffset);
               this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
               try {
@@ -525,6 +545,7 @@ public class LocalSegment implements Segment {
   class Follower implements StreamObserver<SegmentServiceProto.ReplicateResponse>, Lifecycle {
     private long expectedNextOffset;
     private long confirmOffset = NO_OFFSET;
+    private long writeOffset = NO_OFFSET;
     private String followerAddress;
     private StreamObserver<SegmentServiceProto.ReplicateRequest> follower;
     private volatile boolean broken = false;
@@ -611,6 +632,7 @@ public class LocalSegment implements Segment {
     public void onNext(SegmentServiceProto.ReplicateResponse replicateResponse) {
       if (replicateResponse.getStatus() == SegmentServiceProto.ReplicateResponse.Status.SUCCESS) {
         confirmOffset = replicateResponse.getConfirmOffset();
+        writeOffset = replicateResponse.getWriteOffset();
         checkWaiting();
       }
       if (replicateResponse.getStatus() == SegmentServiceProto.ReplicateResponse.Status.RESET) {
@@ -627,17 +649,7 @@ public class LocalSegment implements Segment {
       }
       broken = true;
       log.warn("replica segment {} fail", followerAddress, throwable);
-      failedReplicas.add(this.followerAddress);
-      status =
-          failedReplicas.size() < (meta.getReplicasList().size() + 1) / 2
-              ? Status.REPLICA_LOSS
-              : Status.REPLICA_BREAK;
-      if (status == Status.REPLICA_BREAK) {
-        checkWaiting();
-        for (Waiting waiting : waitConfirmRequests) {
-          waiting.future.complete(new AppendResult(REPLICA_BREAK, NO_OFFSET));
-        }
-      }
+      handleFollowerFail();
     }
 
     @Override
@@ -647,8 +659,28 @@ public class LocalSegment implements Segment {
       return confirmOffset;
     }
 
+    public long getWriteOffset() {
+      return writeOffset;
+    }
+
     public boolean isBroken() {
       return broken;
+    }
+  }
+
+  protected synchronized void handleFollowerFail() {
+    int normal = 1;
+    for (Follower follower : followers) {
+      if (!follower.isBroken()) {
+        normal++;
+      }
+    }
+    if (normal < meta.getReplicaNum() / 2 + 1) {
+      status = Status.REPLICA_BREAK;
+      checkWaiting();
+      for (Waiting waiting : waitConfirmRequests) {
+        waiting.future.complete(new AppendResult(REPLICA_BREAK, NO_OFFSET));
+      }
     }
   }
 }

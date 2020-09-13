@@ -16,18 +16,17 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import com.google.common.io.Files;
-import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -36,7 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
-public class MappedFiles {
+public class MappedFiles implements Lifecycle {
+  public static final long NO_OFFSET = -1;
   private static final Logger log = LoggerFactory.getLogger(MappedFiles.class);
   private String path;
   private int fileSize;
@@ -52,16 +52,7 @@ public class MappedFiles {
     this.fileSize = fileSize;
 
     Utils.ensureDirOK(this.path);
-    try {
-      String checkpoint =
-          Files.asCharSource(new File(this.path + "/checkpoint.json"), Utils.DEFAULT_CHARSET)
-              .read();
-      this.checkpoint = new Gson().fromJson(checkpoint, Checkpoint.class);
-    } catch (IOException e) {
-      this.checkpoint = new Checkpoint();
-      log.info("init MappedFiles {} checkpoint", this.path + "/checkpoint.json");
-    }
-
+    this.checkpoint = Checkpoint.load(this.path + "/checkpoint.json");
     File dir = new File(this.path);
     File[] filesInDir = dir.listFiles();
     if (filesInDir == null) {
@@ -98,7 +89,30 @@ public class MappedFiles {
     }
   }
 
-  public synchronized CompletableFuture<Long> write(ByteBuffer byteBuffer) {
+  @Override
+  public void init() {
+    for (MappedFile mappedFile : files) {
+      mappedFile.init();
+    }
+  }
+
+  @Override
+  public void start() {
+    for (MappedFile mappedFile : files) {
+      mappedFile.start();
+    }
+  }
+
+  @Override
+  public void shutdown() {
+    force();
+    for (MappedFile mappedFile : files) {
+      mappedFile.shutdown();
+    }
+    checkpoint.persist();
+  }
+
+  public synchronized AppendResult append(ByteBuffer byteBuffer) {
     MappedFile last = this.last;
     if (last == null) {
       this.last = new MappedFile(this.path + "/" + Utils.offset2FileName(0), fileSize);
@@ -106,14 +120,10 @@ public class MappedFiles {
       last = this.last;
     }
     int size = byteBuffer.remaining();
-    if (last.remaining() < size) {}
     long offset = this.writeOffset.getAndAdd(size);
     last.write(offset, byteBuffer);
-    last.sync();
-    this.confirmOffset.addAndGet(size);
-    this.checkpoint.setSlo(offset);
     if (last.remaining() <= 0) {
-      last.sync();
+      last.force();
       this.last =
           new MappedFile(
               this.path
@@ -123,7 +133,7 @@ public class MappedFiles {
       this.startOffsets.put(this.last.getStartOffset(), this.last);
       this.writeOffset.set(this.last.getStartOffset());
     }
-    return CompletableFuture.completedFuture(offset);
+    return new AppendResult(offset);
   }
 
   public CompletableFuture<ByteBuffer> read(long offset, int size) {
@@ -134,12 +144,46 @@ public class MappedFiles {
     return CompletableFuture.completedFuture(file.read(offset, size));
   }
 
+  public long force() {
+    long writeOffset = this.writeOffset.get();
+    if (last != null) {
+      last.force();
+      this.confirmOffset.set(writeOffset);
+      this.checkpoint.setSlo(writeOffset);
+    }
+    return writeOffset;
+  }
+
+  public long getStartOffset() {
+    Map.Entry<Long, MappedFile> entry = this.startOffsets.firstEntry();
+    if (entry == null) {
+      return NO_OFFSET;
+    }
+    return entry.getKey();
+  }
+
   public long getConfirmOffset() {
-      return this.confirmOffset.get();
+    return this.confirmOffset.get();
+  }
+
+  public long getWriteOffset() {
+    return this.writeOffset.get();
   }
 
   static class Checkpoint {
+    private String path;
     private long slo;
+
+    public Checkpoint() {}
+
+    public static Checkpoint load(String path) {
+      Checkpoint checkpoint = Utils.file2jsonObj(path, Checkpoint.class);
+      if (checkpoint == null) {
+        checkpoint = new Checkpoint();
+      }
+      checkpoint.path = path;
+      return checkpoint;
+    }
 
     public long getSlo() {
       return slo;
@@ -147,6 +191,26 @@ public class MappedFiles {
 
     public void setSlo(long slo) {
       this.slo = slo;
+    }
+
+    public void persist() {
+      Utils.jsonObj2file(this, path);
+    }
+  }
+
+  static class AppendResult {
+    private long offset;
+
+    public AppendResult(long offset) {
+      this.offset = offset;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
+
+    public void setOffset(long offset) {
+      this.offset = offset;
     }
   }
 }

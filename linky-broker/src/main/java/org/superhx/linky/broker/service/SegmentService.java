@@ -61,12 +61,7 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
                 replicateRequest.getBatchRecord().getTopicId(),
                 replicateRequest.getBatchRecord().getPartition(),
                 replicateRequest.getBatchRecord().getSegmentIndex());
-        segment
-            .replicate(replicateRequest)
-            .thenAccept(
-                rst -> {
-                  responseObserver.onNext(rst);
-                });
+        segment.replicate(replicateRequest, responseObserver);
       }
 
       @Override

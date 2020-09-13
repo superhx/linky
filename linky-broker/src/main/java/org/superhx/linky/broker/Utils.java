@@ -17,6 +17,7 @@
 package org.superhx.linky.broker;
 
 import com.google.common.io.Files;
+import com.google.gson.Gson;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.MessageOrBuilder;
 import com.google.protobuf.util.JsonFormat;
@@ -25,9 +26,11 @@ import org.superhx.linky.service.proto.PartitionMeta;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.text.NumberFormat;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 public class Utils {
   public static final Charset DEFAULT_CHARSET = Charset.forName("UTF-8");
@@ -59,7 +62,6 @@ public class Utils {
     return String.format("%s/segments/%s/%s/%s/meta.json", basePath, topicId, partitionId, index);
   }
 
-
   public static void str2file(String str, String fileName) {
     try {
       ensureDirOK(new File(fileName).getParent());
@@ -78,16 +80,6 @@ public class Utils {
     }
   }
 
-  public static String bytesToHex(byte[] bytes) {
-    char[] hexChars = new char[bytes.length * 2];
-    for (int j = 0; j < bytes.length; j++) {
-      int v = bytes[j] & 0xFF;
-      hexChars[j * 2] = HEX_ARRAY[v >>> 4];
-      hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
-    }
-    return new String(hexChars);
-  }
-
   public static byte[] pb2jsonBytes(MessageOrBuilder builder) {
     try {
       return JsonFormat.printer().print(builder).getBytes(DEFAULT_CHARSET);
@@ -104,13 +96,35 @@ public class Utils {
     }
   }
 
-  public static String getSegmentHex(int topicId, int partition, int index) {
-    ByteBuffer byteBuffer = ByteBuffer.allocate(12);
-    byteBuffer.putInt(topicId);
-    byteBuffer.putInt(partition);
-    byteBuffer.putInt(index);
-    byteBuffer.flip();
-    return bytesToHex(byteBuffer.array());
+  public static void jsonObj2file(Object json, String file) {
+    String str = new Gson().toJson(json);
+    str2file(str, file);
+  }
+
+  public static <T> T file2jsonObj(String path, Class<T> clazz) {
+    File file = new File(path);
+    if (!file.exists()) {
+      return null;
+    }
+    try {
+      String str = Files.asCharSource(file, DEFAULT_CHARSET).read();
+      return new Gson().fromJson(str, clazz);
+    } catch (IOException e) {
+      throw new LinkyIOException(e);
+    }
+  }
+
+  public static String file2str(String path) {
+    File file = new File(path);
+    if (!file.exists()) {
+      return null;
+    }
+    try {
+      String str = Files.asCharSource(file, DEFAULT_CHARSET).read();
+      return str;
+    } catch (IOException e) {
+      throw new LinkyIOException(e);
+    }
   }
 
   public static NodeMeta partitionMeta2NodeMeta(PartitionMeta meta) {
@@ -122,5 +136,13 @@ public class Utils {
         .setEpoch(meta.getEpoch())
         .setStatus(NodeMeta.Status.ONLINE)
         .build();
+  }
+
+  public static ExecutorService newFixedThreadPool(int size, String name) {
+    return Executors.newFixedThreadPool(size, r -> new Thread(r, name));
+  }
+
+  public static ScheduledExecutorService newScheduledThreadPool(int size, String name) {
+    return Executors.newScheduledThreadPool(size, r -> new Thread(r, name));
   }
 }

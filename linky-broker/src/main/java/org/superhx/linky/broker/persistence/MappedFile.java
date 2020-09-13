@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 
 import java.io.File;
@@ -26,7 +27,7 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.concurrent.CompletableFuture;
 
-public class MappedFile {
+public class MappedFile implements Lifecycle {
   private String file;
   private final long startOffset;
   private long writeOffset;
@@ -63,27 +64,38 @@ public class MappedFile {
     }
   }
 
-  public CompletableFuture<Void> write(long offset, ByteBuffer byteBuffer) {
-    CompletableFuture<Void> result = new CompletableFuture<>();
+  @Override
+  public void shutdown() {
+    force();
     try {
-      int size = byteBuffer.limit();
-      channel.position(offset);
-      channel.write(byteBuffer);
-      this.writeOffset += size;
-      channel.force(false);
-      this.confirmOffset += size;
-      return result.completedFuture(null);
+      if (this.channel != null) {
+        this.channel.close();
+      }
+      if (this.randomAccessFile != null) {
+        this.randomAccessFile.close();
+      }
     } catch (IOException e) {
-      result.completeExceptionally(new LinkyIOException(e));
-      return result;
     }
   }
 
-  public void sync() {
+  public void write(long offset, ByteBuffer byteBuffer) {
     try {
-      channel.force(true);
+      int size = byteBuffer.limit();
+      channel.position(offset - startOffset);
+      channel.write(byteBuffer);
+      this.writeOffset += size;
     } catch (IOException e) {
-      e.printStackTrace();
+      throw new LinkyIOException(e);
+    }
+  }
+
+  public void force() {
+    try {
+      long writeOffset = this.writeOffset;
+      channel.force(true);
+      this.confirmOffset = writeOffset;
+    } catch (IOException e) {
+      throw new LinkyIOException(e);
     }
   }
 

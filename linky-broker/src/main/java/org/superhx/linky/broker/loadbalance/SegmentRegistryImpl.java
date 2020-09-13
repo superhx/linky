@@ -77,7 +77,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
       }
       SegmentMeta.Replica intactReplica = null;
       for (SegmentMeta.Replica replica : meta.getReplicasList()) {
-        if (replica.getReplicaOffset() >= meta.getEndOffset() - 1) {
+        if (replica.getReplicaOffset() >= meta.getEndOffset()) {
           intactReplica = replica;
           break;
         }
@@ -90,11 +90,16 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
           if (syncing.contains(segmentReplicaKey)) {
             continue;
           }
-          if (replica.getReplicaOffset() >= meta.getEndOffset() - 1) {
+          if (replica.getReplicaOffset() >= meta.getEndOffset()) {
             continue;
           }
           syncing.add(segmentReplicaKey);
-          log.info("sync {}", meta);
+          String catchup =
+              String.format(
+                  "[REPLICA_CATCHUP] %s from %s, meta %s",
+                  replica.getAddress(), intactReplica.getAddress(), meta);
+          log.info("{} start", catchup);
+          long timestamp = System.currentTimeMillis();
           controlNodeCnx
               .getSegmentServiceStub(replica.getAddress())
               .syncCmd(
@@ -106,11 +111,13 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                       .build(),
                   new StreamObserver<SegmentServiceProto.SyncCmdResponse>() {
                     @Override
-                    public void onNext(SegmentServiceProto.SyncCmdResponse syncCmdResponse) {}
+                    public void onNext(SegmentServiceProto.SyncCmdResponse syncCmdResponse) {
+                      log.info("{} cost {} ms", System.currentTimeMillis() - timestamp);
+                    }
 
                     @Override
                     public void onError(Throwable throwable) {
-                      log.info("syncCmd fail", throwable);
+                      log.info("{} fail", catchup, throwable);
                       syncing.remove(segmentReplicaKey);
                     }
 
@@ -143,7 +150,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
             replicas.add(nodeMeta.getAddress());
           }
           if (replicaSegment.getReplicasList().size() != 0) {
-            log.info("enough replica {}", replicaSegment);
+            log.info("[REPLICA_LOSS] {}", replicaSegment);
             controlNodeCnx
                 .createSegment(replicaSegment.build())
                 .thenAccept(

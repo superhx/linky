@@ -17,6 +17,11 @@
 package org.superhx.linky.broker;
 
 public interface Lifecycle {
+  enum Status {
+    START,
+    SHUTDOWN
+  }
+
   default void init() {}
 
   default void start() {}

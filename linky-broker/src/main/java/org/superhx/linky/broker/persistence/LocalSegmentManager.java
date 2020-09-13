@@ -16,7 +16,6 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import com.google.common.io.Files;
 import com.google.protobuf.util.JsonFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class LocalSegmentManager implements Lifecycle {
@@ -59,16 +59,13 @@ public class LocalSegmentManager implements Lifecycle {
         for (File segmentDir : segmentDirs) {
           int segmentIndex = Integer.valueOf(segmentDir.getName());
           try {
-            String metaStr =
-                Files.asCharSource(
-                        new File(
-                            Utils.getSegmentMetaPath(
-                                this.brokerContext.getStorePath(),
-                                topicId,
-                                partitionId,
-                                segmentIndex)),
-                        Utils.DEFAULT_CHARSET)
-                    .read();
+            String metaPath =
+                Utils.getSegmentMetaPath(
+                    this.brokerContext.getStorePath(), topicId, partitionId, segmentIndex);
+            String metaStr = Utils.file2str(metaPath);
+            if (metaStr == null) {
+              continue;
+            }
             SegmentMeta.Builder builder = SegmentMeta.newBuilder();
             JsonFormat.parser().merge(metaStr, builder);
             SegmentMeta segmentMeta = builder.build();
@@ -82,6 +79,23 @@ public class LocalSegmentManager implements Lifecycle {
           }
         }
       }
+    }
+    for (Segment segment : segments.values()) {
+      segment.init();
+    }
+  }
+
+  @Override
+  public void start() {
+    for (Segment segment : segments.values()) {
+      segment.start();
+    }
+  }
+
+  @Override
+  public void shutdown() {
+    for (Segment segment : segments.values()) {
+      segment.shutdown();
     }
   }
 
@@ -144,6 +158,12 @@ public class LocalSegmentManager implements Lifecycle {
 
   public List<SegmentMeta> getLocalSegments() {
     return segments.values().stream().map(s -> s.getMeta()).collect(Collectors.toList());
+  }
+
+  public void forEach(Consumer<Segment> action) {
+    for (Segment segment : segments.values()) {
+      action.accept(segment);
+    }
   }
 
   public void setPersistenceFactory(PersistenceFactory persistenceFactory) {

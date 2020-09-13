@@ -52,6 +52,7 @@ message ReplicateResponse {
     }
     Status status = 1;
     int64 confirmOffset = 2;
+    int64 writeOffset = 3;
 }
 
 message CreateRequest {

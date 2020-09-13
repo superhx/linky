@@ -37,12 +37,9 @@ import org.superhx.linky.service.proto.NodeMeta;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 
 public class LinkyBrokerStartup implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LinkyBrokerStartup.class);
-  private ScheduledExecutorService schedule = Executors.newSingleThreadScheduledExecutor();
   private List<Lifecycle> components = new ArrayList<>();
   private Server server;
   private BrokerContext brokerContext;
@@ -61,6 +58,7 @@ public class LinkyBrokerStartup implements Lifecycle {
 
     DataNodeCnx dataNodeCnx = new DataNodeCnx();
     PersistenceFactoryImpl persistenceFactory = new PersistenceFactoryImpl();
+    components.add(persistenceFactory);
     LocalSegmentManager localSegmentManager = new LocalSegmentManager();
     components.add(localSegmentManager);
     PartitionManager partitionManager = new PartitionManager();

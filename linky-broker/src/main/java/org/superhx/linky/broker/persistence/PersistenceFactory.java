@@ -16,10 +16,11 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-public interface PersistenceFactory {
+public interface PersistenceFactory extends Lifecycle {
 
     Partition newPartition(PartitionMeta partitionMeta);
 
