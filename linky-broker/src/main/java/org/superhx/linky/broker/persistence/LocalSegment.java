@@ -16,8 +16,6 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.util.JsonFormat;
 import io.grpc.Context;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -37,13 +35,12 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.REPLICA_BREAK;
 
 public class LocalSegment implements Segment {
   private static final Logger log = LoggerFactory.getLogger(LocalSegment.class);
-  private static final int fileSize = 12 * 1024 * 1024;
+  private static final int fileSize = 12 * 1024;
   private static final int INDEX_UNIT_SIZE = 12;
   private SegmentMeta.Builder meta;
   private int topic;
@@ -87,13 +84,18 @@ public class LocalSegment implements Segment {
               long offset = index.getLong();
               int size = index.getInt();
               if (size == 0) {
-                log.debug("{} scan pos {} return noop", mappedFile, lso);
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return noop", mappedFile, lso);
+                }
                 return lso;
               } else {
-                log.debug("{} scan pos {} return index {}/{}", mappedFile, lso, offset, size);
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return index {}/{}", mappedFile, lso, offset, size);
+                }
               }
               return lso + 12;
-            });
+            },
+            null);
 
     this.meta = meta.toBuilder();
     this.topic = meta.getTopicId();
@@ -221,7 +223,7 @@ public class LocalSegment implements Segment {
           });
       return rst;
     } catch (Throwable t) {
-      log.error("append fail unexpect ex", t);
+      log.error("append fail unexpected ex", t);
       rst.completeExceptionally(t);
       return rst;
     }
@@ -238,7 +240,9 @@ public class LocalSegment implements Segment {
       return;
     }
     BatchRecord batchRecord = request.getBatchRecord();
-    log.info("replica {}", batchRecord);
+    if (log.isDebugEnabled()) {
+      log.debug("receive replica {}", batchRecord);
+    }
 
     if (nextOffset.get() != batchRecord.getFirstOffset()) {
       log.info("need reset to {}", nextOffset.get());
@@ -395,6 +399,18 @@ public class LocalSegment implements Segment {
   }
 
   @Override
+  public void truncateDirtyIndex(long physicalOffset) {
+    try {
+      for (long offset = mappedFiles.getConfirmOffset(); offset > 0; offset = offset - 12) {
+        ByteBuffer index = mappedFiles.read(offset - INDEX_UNIT_SIZE, 12).get();
+        long indexPhysicalOffset = index.getLong();
+      }
+    } catch (Exception e) {
+      throw new LinkyIOException(e);
+    }
+  }
+
+  @Override
   public int getIndex() {
     return index;
   }
@@ -458,26 +474,16 @@ public class LocalSegment implements Segment {
     this.status = Status.READONLY;
     log.info("start seal segment {}", meta);
     return CompletableFuture.allOf(
-            waitConfirmRequests.stream()
-                .map(w -> w.future)
-                .collect(Collectors.toList())
-                .toArray(new CompletableFuture[0]))
+            waitConfirmRequests.stream().map(w -> w.future).toArray(CompletableFuture[]::new))
         .thenAccept(
             r -> {
               this.endOffset = this.confirmOffset;
               this.meta.setEndOffset(endOffset);
               this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
-              try {
-                Utils.str2file(
-                    JsonFormat.printer().print(this.meta),
-                    Utils.getSegmentMetaPath(
-                        this.brokerContext.getStorePath(),
-                        meta.getTopicId(),
-                        meta.getPartition(),
-                        meta.getIndex()));
-              } catch (InvalidProtocolBufferException e) {
-                e.printStackTrace();
-              }
+              Utils.byte2file(
+                  Utils.pb2jsonBytes(this.meta),
+                  Utils.getSegmentMetaPath(
+                      this.brokerContext.getStorePath(), topic, partition, index));
               log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
             });
   }
@@ -586,7 +592,9 @@ public class LocalSegment implements Segment {
         }
         return;
       }
-      log.info("replicate {} {}", followerAddress, request);
+      if (log.isDebugEnabled()) {
+        log.debug("send replica to {} {}", followerAddress, request);
+      }
       follower.onNext(request);
       expectedNextOffset += request.getBatchRecord().getRecordsCount();
     }

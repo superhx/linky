@@ -25,6 +25,8 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.concurrent.CompletableFuture;
 
 public class MappedFile implements Lifecycle {
@@ -56,6 +58,7 @@ public class MappedFile implements Lifecycle {
       } else {
         randomAccessFile.setLength(fileSize);
         this.mappedByteBuffer = this.channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
+        this.writeOffset = this.startOffset;
         this.confirmOffset = this.startOffset;
         this.length = randomAccessFile.length();
       }
@@ -146,6 +149,14 @@ public class MappedFile implements Lifecycle {
 
   public long getConfirmOffset() {
     return this.confirmOffset;
+  }
+
+  public void delete() {
+    try {
+      Files.delete(Paths.get(file));
+    } catch (IOException e) {
+      throw new LinkyIOException(e);
+    }
   }
 
   @Override

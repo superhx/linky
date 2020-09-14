@@ -24,15 +24,13 @@ import org.superhx.linky.broker.Utils;
 
 import java.io.File;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.NavigableMap;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class MappedFiles implements Lifecycle {
@@ -46,10 +44,16 @@ public class MappedFiles implements Lifecycle {
   private volatile MappedFile last;
   private AtomicLong writeOffset = new AtomicLong();
   private AtomicLong confirmOffset = new AtomicLong();
+  private Function<Integer, ByteBuffer> blankFiller;
 
-  public MappedFiles(String path, int fileSize, BiFunction<MappedFile, Long, Long> dataChecker) {
+  public MappedFiles(
+      String path,
+      int fileSize,
+      BiFunction<MappedFile, Long, Long> dataChecker,
+      Function<Integer, ByteBuffer> blankFiller) {
     this.path = path;
     this.fileSize = fileSize;
+    this.blankFiller = blankFiller;
 
     Utils.ensureDirOK(this.path);
     this.checkpoint = Checkpoint.load(this.path + "/checkpoint.json");
@@ -61,7 +65,7 @@ public class MappedFiles implements Lifecycle {
     List<File> dataFiles =
         Arrays.asList(filesInDir).stream()
             .filter(f -> !f.getName().contains("json"))
-            .sorted()
+            .sorted(Comparator.comparing(f -> Integer.valueOf(f.getName())))
             .collect(Collectors.toList());
     long lso = this.checkpoint.getSlo();
     for (int i = 0; i < dataFiles.size(); i++) {
@@ -113,27 +117,31 @@ public class MappedFiles implements Lifecycle {
   }
 
   public synchronized AppendResult append(ByteBuffer byteBuffer) {
-    MappedFile last = this.last;
-    if (last == null) {
-      this.last = new MappedFile(this.path + "/" + Utils.offset2FileName(0), fileSize);
-      this.startOffsets.put(this.last.getStartOffset(), this.last);
-      last = this.last;
+    for (; ; ) {
+      MappedFile last = this.last;
+      if (last == null) {
+        this.last = new MappedFile(this.path + "/" + Utils.offset2FileName(0), fileSize);
+        this.startOffsets.put(this.last.getStartOffset(), this.last);
+        last = this.last;
+      }
+      int size = byteBuffer.remaining();
+      long offset = this.writeOffset.getAndAdd(size);
+      if (last.remaining() < size) {
+        if (last.remaining() != 0) {
+          last.write(offset, blankFiller.apply(last.remaining()));
+        }
+        last.force();
+        this.last =
+            new MappedFile(
+                this.path + "/" + Utils.offset2FileName(last.getWriteOffset()), fileSize);
+        this.startOffsets.put(this.last.getStartOffset(), this.last);
+        this.writeOffset.set(this.last.getStartOffset());
+        continue;
+      }
+
+      last.write(offset, byteBuffer);
+      return new AppendResult(offset);
     }
-    int size = byteBuffer.remaining();
-    long offset = this.writeOffset.getAndAdd(size);
-    last.write(offset, byteBuffer);
-    if (last.remaining() <= 0) {
-      last.force();
-      this.last =
-          new MappedFile(
-              this.path
-                  + "/"
-                  + Utils.offset2FileName(last.getStartOffset() + last.getWriteOffset()),
-              fileSize);
-      this.startOffsets.put(this.last.getStartOffset(), this.last);
-      this.writeOffset.set(this.last.getStartOffset());
-    }
-    return new AppendResult(offset);
   }
 
   public CompletableFuture<ByteBuffer> read(long offset, int size) {

@@ -19,7 +19,6 @@ package org.superhx.linky.broker.persistence;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.service.proto.BatchRecord;
 
 import java.io.File;
@@ -33,7 +32,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   public static final int RECORD_MAGIC_CODE = -19951994;
   public static final int BLANK_MAGIC_CODE = -2333;
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
-  private static final int fileSize = 1024 * 1024 * 1024;
+  private static final int fileSize = 1024 * 1024;
   private static final long MAX_WAITING_BYTES = 1024 * 1024;
   private static final int HEADER_SIZE = 4 + 4;
   private List<AppendHook> appendHookList = new CopyOnWriteArrayList<>();
@@ -66,6 +65,14 @@ public class LocalWriteAheadLog implements WriteAheadLog {
                 throw new RuntimeException();
               }
               return lso;
+            },
+            size -> {
+              ByteBuffer buf = ByteBuffer.allocate(size);
+              buf.putInt(BLANK_MAGIC_CODE);
+              buf.putInt(size - 8);
+              buf.put(new byte[size - 8]);
+              buf.flip();
+              return buf;
             });
   }
 
@@ -77,7 +84,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   @Override
   public void start() {
     mappedFiles.start();
-    scheduler.scheduleAtFixedRate(() -> force(), 10, 10, TimeUnit.MILLISECONDS);
+    scheduler.scheduleAtFixedRate(() -> force(), 1, 1, TimeUnit.MILLISECONDS);
   }
 
   @Override
@@ -97,7 +104,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
     AppendResult appendResult;
     synchronized (this) {
       appendResult = append0(byteBuffer);
-      afterAppend(batchRecord, appendResult);
+      appendResult.thenAccept(r -> afterAppend(batchRecord, appendResult));
     }
     return appendResult;
   }

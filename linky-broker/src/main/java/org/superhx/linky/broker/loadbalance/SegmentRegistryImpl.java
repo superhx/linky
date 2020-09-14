@@ -112,7 +112,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                   new StreamObserver<SegmentServiceProto.SyncCmdResponse>() {
                     @Override
                     public void onNext(SegmentServiceProto.SyncCmdResponse syncCmdResponse) {
-                      log.info("{} cost {} ms", System.currentTimeMillis() - timestamp);
+                      log.info("{} cost {} ms", catchup, System.currentTimeMillis() - timestamp);
                     }
 
                     @Override
@@ -136,7 +136,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                 .collect(Collectors.toSet());
         SegmentMeta.Builder replicaSegment = onlineSegment.toBuilder().clearReplicas();
         for (int i = onlineSegment.getReplicasCount();
-            i <= partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
+            i < partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
             i++) {
           for (NodeMeta nodeMeta : nodeMetas) {
             if (replicas.contains(nodeMeta.getAddress())) {

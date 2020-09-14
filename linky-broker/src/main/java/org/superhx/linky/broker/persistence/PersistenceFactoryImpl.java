@@ -46,8 +46,8 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
     if (writeAheadLog != null) {
       return writeAheadLog;
     }
-    writeAheadLog = new LocalWriteAheadLog(brokerContext.getStorePath() + "/wal/logs");
-    indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/index");
+    writeAheadLog = new LocalWriteAheadLog(brokerContext.getStorePath() + "/wal/0/logs");
+    indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/0/index");
     indexBuilder.setWriteAheadLog(writeAheadLog);
     indexBuilder.setLocalSegmentManager(localSegmentManager);
     writeAheadLog.registerAppendHook(indexBuilder);

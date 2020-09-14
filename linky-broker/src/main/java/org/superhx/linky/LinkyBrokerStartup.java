@@ -177,8 +177,6 @@ public class LinkyBrokerStartup implements Lifecycle {
   }
 
   public static void main(String... args) {
-
-    System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "debug");
     LinkyBrokerStartup broker = new LinkyBrokerStartup();
     broker.init();
     broker.start();

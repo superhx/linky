@@ -56,6 +56,8 @@ public interface Segment extends Lifecycle {
 
   void forceIndex();
 
+  default void truncateDirtyIndex(long physicalOffset) {}
+
   int getIndex();
 
   /**

@@ -28,33 +28,42 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Client {
-    static int count = 1;
+  static int count = 2 * 1024;
+  //    static int count = 1;
+  //    static int count = 0;
+
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
-        ManagedChannelBuilder.forTarget("localhost:9593").usePlaintext().build();
+        ManagedChannelBuilder.forTarget("localhost:9594").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
     final AtomicLong maxOffset = new AtomicLong();
+    long start = System.currentTimeMillis();
+    CountDownLatch latch = new CountDownLatch(count);
     for (int i = 0; i < count; i++) {
+      String body = "";
+      for (int j = 0; j < 1024; j++) {
+        body += "hello";
+      }
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
               .addRecords(
                   Record.newBuilder()
                       .setKey("rk")
-                      .setValue(ByteString.copyFrom((new Date()+ " hello world " + i).getBytes()))
+                      .setValue(ByteString.copyFrom((new Date() + body).getBytes()))
                       .build())
               .build();
       PutRequest request =
           PutRequest.newBuilder().setTopic("FOO").setBatchRecord(batchRecord).build();
-      CountDownLatch latch = new CountDownLatch(1);
+      CountDownLatch finalLatch1 = latch;
       stub.put(
           request,
           new StreamObserver<PutResponse>() {
             @Override
             public void onNext(PutResponse putResponse) {
-              System.out.println(String.format("req %s return %s", request, putResponse));
+              System.out.println(String.format("req return %s", putResponse));
               if (maxOffset.get() < putResponse.getOffset() + 1) {
-                  maxOffset.set( putResponse.getOffset() + 1);
+                maxOffset.set(putResponse.getOffset() + 1);
               }
             }
 
@@ -65,22 +74,29 @@ public class Client {
 
             @Override
             public void onCompleted() {
-              latch.countDown();
+              finalLatch1.countDown();
             }
           });
-
-      latch.await();
     }
+    latch.await();
+    System.out.println(
+        String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
     for (int i = 0; i < maxOffset.get(); i++) {
-      CountDownLatch latch = new CountDownLatch(1);
+      //          for (int i = 202; i < 203; i++) {
 
+      latch = new CountDownLatch(1);
+      CountDownLatch finalLatch = latch;
       stub.get(
           GetRequest.newBuilder().setTopic("FOO").setPartition(0).setOffset(i).build(),
           new StreamObserver<GetResponse>() {
             @Override
             public void onNext(GetResponse getResponse) {
-              System.out.println("Get return " + getResponse);
+              System.out.println(
+                  "Get return offset:"
+                      + getResponse.getBatchRecord().getFirstOffset()
+                      + " count:"
+                      + getResponse.getBatchRecord().getRecordsCount());
             }
 
             @Override
@@ -90,7 +106,7 @@ public class Client {
 
             @Override
             public void onCompleted() {
-              latch.countDown();
+              finalLatch.countDown();
             }
           });
       latch.await();
