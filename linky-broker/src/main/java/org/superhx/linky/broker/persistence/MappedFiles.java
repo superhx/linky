@@ -65,7 +65,7 @@ public class MappedFiles implements Lifecycle {
     List<File> dataFiles =
         Arrays.asList(filesInDir).stream()
             .filter(f -> !f.getName().contains("json"))
-            .sorted(Comparator.comparing(f -> Integer.valueOf(f.getName())))
+            .sorted(Comparator.comparing(f -> Long.valueOf(f.getName())))
             .collect(Collectors.toList());
     long lso = this.checkpoint.getSlo();
     for (int i = 0; i < dataFiles.size(); i++) {
@@ -134,6 +134,7 @@ public class MappedFiles implements Lifecycle {
         this.last =
             new MappedFile(
                 this.path + "/" + Utils.offset2FileName(last.getWriteOffset()), fileSize);
+        files.add(this.last);
         this.startOffsets.put(this.last.getStartOffset(), this.last);
         this.writeOffset.set(this.last.getStartOffset());
         continue;
@@ -176,6 +177,12 @@ public class MappedFiles implements Lifecycle {
 
   public long getWriteOffset() {
     return this.writeOffset.get();
+  }
+
+  public void delete() {
+    for (MappedFile file : files) {
+      file.delete();
+    }
   }
 
   static class Checkpoint {

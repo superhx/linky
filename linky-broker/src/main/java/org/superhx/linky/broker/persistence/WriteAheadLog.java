@@ -19,6 +19,8 @@ public interface WriteAheadLog extends Lifecycle {
 
   long getConfirmOffset();
 
+  void delete();
+
   class AppendResult extends CompletableFuture<AppendResult> {
     private long offset;
     private int size;

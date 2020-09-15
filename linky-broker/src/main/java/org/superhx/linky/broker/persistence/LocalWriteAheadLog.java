@@ -19,6 +19,7 @@ package org.superhx.linky.broker.persistence;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
 
 import java.io.File;
@@ -32,16 +33,16 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   public static final int RECORD_MAGIC_CODE = -19951994;
   public static final int BLANK_MAGIC_CODE = -2333;
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
-  private static final int fileSize = 1024 * 1024;
+  private static final int fileSize = 1024 * 1024 * 1024;
   private static final long MAX_WAITING_BYTES = 1024 * 1024;
   private static final int HEADER_SIZE = 4 + 4;
   private List<AppendHook> appendHookList = new CopyOnWriteArrayList<>();
   private MappedFiles mappedFiles;
   private ConcurrentLinkedQueue<AppendResult> waitingConfirm = new ConcurrentLinkedQueue<>();
-  private ExecutorService syncExecutor =
-      Executors.newSingleThreadExecutor(r -> new Thread(r, "LocalWriteAheadLog"));
-  private ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+  private ScheduledExecutorService forceExecutor =
+      Utils.newScheduledThreadPool(1, "LocalWriteAheadLogForce-");
   private AtomicLong waitingConfirmBytes = new AtomicLong();
+  private BlockingQueue<ByteBuffer> waitingBuffers = new ArrayBlockingQueue<ByteBuffer>(1024);
 
   public LocalWriteAheadLog(String storePath) {
     this.mappedFiles =
@@ -84,12 +85,13 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   @Override
   public void start() {
     mappedFiles.start();
-    scheduler.scheduleAtFixedRate(() -> force(), 1, 1, TimeUnit.MILLISECONDS);
+    forceExecutor.scheduleAtFixedRate(() -> force(), 1, 1, TimeUnit.MILLISECONDS);
   }
 
   @Override
   public void shutdown() {
     mappedFiles.shutdown();
+    forceExecutor.shutdown();
   }
 
   @Override
@@ -121,7 +123,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   }
 
   public void force() {
-    syncExecutor.submit(() -> force0());
+    forceExecutor.submit(() -> force0());
   }
 
   protected void force0() {
@@ -172,6 +174,11 @@ public class LocalWriteAheadLog implements WriteAheadLog {
   @Override
   public long getConfirmOffset() {
     return mappedFiles.getConfirmOffset();
+  }
+
+  @Override
+  public void delete() {
+    mappedFiles.delete();
   }
 
   protected BatchRecord parse(ByteBuffer byteBuffer) {
