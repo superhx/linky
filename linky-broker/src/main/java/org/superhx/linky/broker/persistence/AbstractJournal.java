@@ -16,11 +16,9 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.Utils;
-import org.superhx.linky.service.proto.BatchRecord;
 
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -29,40 +27,39 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class LocalWriteAheadLog implements WriteAheadLog {
+public abstract class AbstractJournal<T extends Journal.RecordData> implements Journal {
   public static final int RECORD_MAGIC_CODE = -19951994;
   public static final int BLANK_MAGIC_CODE = -2333;
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private static final int fileSize = 1024 * 1024 * 1024;
-  private static final long MAX_WAITING_BYTES = 1024 * 1024;
+  private static final int MAX_WAITING_BYTES = 1024 * 1024 * 4;
   private static final int HEADER_SIZE = 4 + 4;
   private List<AppendHook> appendHookList = new CopyOnWriteArrayList<>();
-  private MappedFiles mappedFiles;
+  private ChannelFiles channelFiles;
   private ConcurrentLinkedQueue<AppendResult> waitingConfirm = new ConcurrentLinkedQueue<>();
   private ScheduledExecutorService forceExecutor =
       Utils.newScheduledThreadPool(1, "LocalWriteAheadLogForce-");
   private AtomicLong waitingConfirmBytes = new AtomicLong();
-  private BlockingQueue<ByteBuffer> waitingBuffers = new ArrayBlockingQueue<ByteBuffer>(1024);
 
-  public LocalWriteAheadLog(String storePath) {
-    this.mappedFiles =
-        new MappedFiles(
+  public AbstractJournal(String storePath) {
+    this.channelFiles =
+        new ChannelFiles(
             storePath,
             fileSize,
-            (mappedFile, lso) -> {
-              ByteBuffer header = mappedFile.read(lso, 8);
+            (ifile, lso) -> {
+              ByteBuffer header = ifile.read(lso, 8);
               int size = header.getInt();
               int magicCode = header.getInt();
               if (size == 0) {
-                log.debug("{} scan pos {} return noop", mappedFile, lso);
+                log.debug("{} scan pos {} return noop", ifile, lso);
               } else if (magicCode == BLANK_MAGIC_CODE) {
-                log.debug("{} scan pos {} return blank msg", mappedFile, lso);
-                lso = mappedFile.getStartOffset() + mappedFile.length();
+                log.debug("{} scan pos {} return blank msg", ifile, lso);
+                lso = ifile.startOffset() + ifile.length();
               } else if (magicCode == RECORD_MAGIC_CODE) {
-                log.debug("{} scan pos {} return msg", mappedFile, lso);
+                log.debug("{} scan pos {} return msg", ifile, lso);
                 lso += size;
               } else {
-                log.debug("{} scan pos {} unknown magic", mappedFile, lso);
+                log.debug("{} scan pos {} unknown magic", ifile, lso);
                 throw new RuntimeException();
               }
               return lso;
@@ -79,24 +76,24 @@ public class LocalWriteAheadLog implements WriteAheadLog {
 
   @Override
   public void init() {
-    mappedFiles.init();
+    channelFiles.init();
   }
 
   @Override
   public void start() {
-    mappedFiles.start();
+    channelFiles.start();
     forceExecutor.scheduleAtFixedRate(() -> force(), 1, 1, TimeUnit.MILLISECONDS);
   }
 
   @Override
   public void shutdown() {
-    mappedFiles.shutdown();
+    channelFiles.shutdown();
     forceExecutor.shutdown();
   }
 
   @Override
-  public AppendResult append(BatchRecord batchRecord) {
-    byte[] data = batchRecord.toByteArray();
+  public CompletableFuture<AppendResult> append(RecordData recordData) {
+    byte[] data = recordData.toByteArray();
     int size = 4 + 4 + data.length;
     ByteBuffer byteBuffer = ByteBuffer.allocate(size);
     byteBuffer.putInt(size);
@@ -105,19 +102,20 @@ public class LocalWriteAheadLog implements WriteAheadLog {
     byteBuffer.flip();
     AppendResult appendResult;
     synchronized (this) {
-      appendResult = append0(byteBuffer);
-      appendResult.thenAccept(r -> afterAppend(batchRecord, appendResult));
-    }
-    return appendResult;
-  }
-
-  public AppendResult append0(ByteBuffer byteBuffer) {
-    int size = byteBuffer.limit();
-    MappedFiles.AppendResult mappedFileAppendResult = mappedFiles.append(byteBuffer);
-    AppendResult appendResult = new AppendResult(mappedFileAppendResult.getOffset(), size);
-    waitingConfirm.add(appendResult);
-    if (waitingConfirmBytes.addAndGet(size) > MAX_WAITING_BYTES) {
-      force();
+      IFiles.AppendResult mappedFileAppendResult = channelFiles.append(byteBuffer);
+      appendResult = new AppendResult(mappedFileAppendResult.getOffset(), size);
+      appendResult.thenAccept(
+          r ->
+              afterAppend(
+                  Record.newBuilder()
+                      .setOffset(r.getOffset())
+                      .setSize(r.getSize())
+                      .setData(recordData)
+                      .build()));
+      waitingConfirm.add(appendResult);
+      if (waitingConfirmBytes.addAndGet(size) > MAX_WAITING_BYTES) {
+        force();
+      }
     }
     return appendResult;
   }
@@ -128,7 +126,7 @@ public class LocalWriteAheadLog implements WriteAheadLog {
 
   protected void force0() {
     long lastWaitingConfirmBytes = this.waitingConfirmBytes.get();
-    long confirmPhysicalOffset = mappedFiles.force();
+    long confirmPhysicalOffset = channelFiles.force();
     this.waitingConfirmBytes.getAndAdd(-lastWaitingConfirmBytes);
     for (; ; ) {
       AppendResult rst = waitingConfirm.peek();
@@ -139,26 +137,26 @@ public class LocalWriteAheadLog implements WriteAheadLog {
         break;
       }
       waitingConfirm.poll();
-      rst.complete();
+      rst.complete(rst);
     }
   }
 
   @Override
-  public CompletableFuture<BatchRecord> get(long offset, int size) {
-    return mappedFiles.read(offset, size).thenApply(b -> parse(b));
+  public CompletableFuture<Record<T>> get(long offset, int size) {
+    return channelFiles.read(offset, size).thenApply(b -> parse(offset, b));
   }
 
   @Override
-  public CompletableFuture<WalBatchRecord> get(long offset) {
+  public CompletableFuture<Record<T>> get(long offset) {
     AtomicInteger size = new AtomicInteger();
-    return mappedFiles
+    return channelFiles
         .read(offset, HEADER_SIZE)
         .thenCompose(
             header -> {
               size.set(header.getInt());
-              return mappedFiles.read(offset, size.get());
+              return channelFiles.read(offset, size.get());
             })
-        .thenApply(buf -> new WalBatchRecord(parse(buf), size.get()));
+        .thenApply(buf -> parse(offset, buf));
   }
 
   @Override
@@ -168,34 +166,24 @@ public class LocalWriteAheadLog implements WriteAheadLog {
 
   @Override
   public long getStartOffset() {
-    return mappedFiles.getStartOffset();
+    return channelFiles.startOffset();
   }
 
   @Override
   public long getConfirmOffset() {
-    return mappedFiles.getConfirmOffset();
+    return channelFiles.confirmOffset();
   }
 
   @Override
   public void delete() {
-    mappedFiles.delete();
+    channelFiles.delete();
   }
 
-  protected BatchRecord parse(ByteBuffer byteBuffer) {
-    ByteBuffer data = byteBuffer.slice();
-    data.getInt();
-    data.getInt();
-    try {
-      return BatchRecord.parseFrom(data);
-    } catch (InvalidProtocolBufferException e) {
-      e.printStackTrace();
-    }
-    return null;
-  }
+  protected abstract Record<T> parse(long offset, ByteBuffer byteBuffer);
 
-  protected void afterAppend(BatchRecord batchRecord, AppendResult appendResult) {
+  protected void afterAppend(Record record) {
     for (AppendHook appendHook : appendHookList) {
-      appendHook.afterAppend(batchRecord, appendResult);
+      appendHook.afterAppend(record);
     }
   }
 

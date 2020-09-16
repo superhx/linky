@@ -24,14 +24,14 @@ import org.superhx.linky.service.proto.BatchRecord;
 
 import java.util.concurrent.*;
 
-import static org.superhx.linky.broker.persistence.MappedFiles.NO_OFFSET;
+import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
 
-public class IndexBuilder implements WriteAheadLog.AppendHook, Lifecycle {
+public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>, Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private String storePath;
   private Status status;
   private LocalSegmentManager localSegmentManager;
-  private WriteAheadLog writeAheadLog;
+  private Journal<BatchRecordJournalData> journal;
   private long walSlo;
   private Checkpoint checkpoint;
   private BlockingQueue<WaitingIndex> waitingPutIndexes = new LinkedBlockingQueue<>();
@@ -66,23 +66,6 @@ public class IndexBuilder implements WriteAheadLog.AppendHook, Lifecycle {
     checkpoint.persist();
   }
 
-  @Override
-  public void afterAppend(BatchRecord batchRecord, WriteAheadLog.AppendResult appendResult) {
-    int topicId = batchRecord.getTopicId();
-    int partition = batchRecord.getPartition();
-    int segmentIndex = batchRecord.getSegmentIndex();
-    for (long offset = batchRecord.getFirstOffset();
-        offset < batchRecord.getFirstOffset() + batchRecord.getRecordsCount();
-        offset++) {
-      waitingPutIndexes.offer(
-          new WaitingIndex(
-              topicId,
-              partition,
-              segmentIndex,
-              new Segment.Index(offset, appendResult.getOffset(), appendResult.getSize())));
-    }
-  }
-
   protected void recover() {
     try {
       recover0();
@@ -94,17 +77,19 @@ public class IndexBuilder implements WriteAheadLog.AppendHook, Lifecycle {
   }
 
   protected void recover0() throws InterruptedException, ExecutionException {
-    if (writeAheadLog.getStartOffset() == NO_OFFSET) {
+    if (journal.getStartOffset() == NO_OFFSET) {
       log.info("wal[{}] is empty, skip recover index");
       return;
     }
-    for (long physicalOffset = Math.max(walSlo, writeAheadLog.getStartOffset());
-        physicalOffset < writeAheadLog.getConfirmOffset(); ) {
-      WriteAheadLog.WalBatchRecord walBatchRecord = writeAheadLog.get(physicalOffset).get();
-      afterAppend(
-          walBatchRecord.getBatchRecord(),
-          new WriteAheadLog.AppendResult(physicalOffset, walBatchRecord.getSize()));
-      physicalOffset += walBatchRecord.getSize();
+    for (long physicalOffset = Math.max(walSlo, journal.getStartOffset());
+        physicalOffset < journal.getConfirmOffset(); ) {
+      Journal.Record record = journal.get(physicalOffset).get();
+      if (record.isBlank()) {
+        physicalOffset += record.getSize();
+        continue;
+      }
+      afterAppend(record);
+      physicalOffset += record.getSize();
     }
   }
 
@@ -144,8 +129,26 @@ public class IndexBuilder implements WriteAheadLog.AppendHook, Lifecycle {
     this.localSegmentManager = localSegmentManager;
   }
 
-  public void setWriteAheadLog(WriteAheadLog writeAheadLog) {
-    this.writeAheadLog = writeAheadLog;
+  public void setJournal(Journal journal) {
+    this.journal = journal;
+  }
+
+  @Override
+  public void afterAppend(Journal.Record<BatchRecordJournalData> record) {
+    BatchRecord batchRecord = record.getData().getBatchRecord();
+    int topicId = batchRecord.getTopicId();
+    int partition = batchRecord.getPartition();
+    int segmentIndex = batchRecord.getSegmentIndex();
+    for (long offset = batchRecord.getFirstOffset();
+        offset < batchRecord.getFirstOffset() + batchRecord.getRecordsCount();
+        offset++) {
+      waitingPutIndexes.offer(
+          new WaitingIndex(
+              topicId,
+              partition,
+              segmentIndex,
+              new Segment.Index(offset, record.getOffset(), record.getSize())));
+    }
   }
 
   static class WaitingIndex {

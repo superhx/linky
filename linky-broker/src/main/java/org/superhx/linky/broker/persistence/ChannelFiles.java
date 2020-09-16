@@ -16,16 +16,22 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import org.superhx.linky.broker.Lifecycle;
-import org.superhx.linky.service.proto.PartitionMeta;
-import org.superhx.linky.service.proto.SegmentMeta;
+import java.nio.ByteBuffer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
-public interface PersistenceFactory extends Lifecycle {
+public class ChannelFiles extends AbstractFiles {
 
-    Partition newPartition(PartitionMeta partitionMeta);
+  public ChannelFiles(
+      String path,
+      int fileSize,
+      BiFunction<IFile, Long, Long> dataChecker,
+      Function<Integer, ByteBuffer> blankFiller) {
+    super(path, fileSize, dataChecker, blankFiller);
+  }
 
-    Segment newSegment(SegmentMeta segmentMeta);
-
-    Journal newWriteAheadLog();
-
+  @Override
+  protected IFile newFile(String path, int fileSize) {
+    return new ChannelFile(path, fileSize);
+  }
 }

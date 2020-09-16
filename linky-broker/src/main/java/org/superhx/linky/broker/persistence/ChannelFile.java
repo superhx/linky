@@ -16,20 +16,17 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.concurrent.CompletableFuture;
 
-public class MappedFile implements Lifecycle {
+public class ChannelFile implements IFile {
   private String file;
   private final long startOffset;
   private long writeOffset;
@@ -37,31 +34,20 @@ public class MappedFile implements Lifecycle {
   private long length;
   private RandomAccessFile randomAccessFile;
   private FileChannel channel;
-  private MappedByteBuffer mappedByteBuffer;
   private int fileSize;
 
-  public MappedFile(String file, int fileSize) {
-    LocalWriteAheadLog.ensureDirOK(new File(file).getParent());
+  public ChannelFile(String file, int fileSize) {
+    AbstractJournal.ensureDirOK(new File(file).getParent());
     this.file = file;
     this.fileSize = fileSize;
     this.startOffset = Long.valueOf(new File(file).getName());
-    boolean readOnly = false;
     try {
-      randomAccessFile = new RandomAccessFile(file, readOnly ? "r" : "rw");
+      randomAccessFile = new RandomAccessFile(file, "rw");
       this.channel = randomAccessFile.getChannel();
-      if (readOnly) {
-        this.mappedByteBuffer =
-            this.channel.map(FileChannel.MapMode.READ_ONLY, 0, randomAccessFile.length());
-        this.writeOffset = this.startOffset + (int) randomAccessFile.length();
-        this.confirmOffset = this.writeOffset;
-        this.length = randomAccessFile.length();
-      } else {
-        randomAccessFile.setLength(fileSize);
-        this.mappedByteBuffer = this.channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
-        this.writeOffset = this.startOffset;
-        this.confirmOffset = this.startOffset;
-        this.length = randomAccessFile.length();
-      }
+      randomAccessFile.setLength(fileSize);
+      this.writeOffset = this.startOffset;
+      this.confirmOffset = this.startOffset;
+      this.length = randomAccessFile.length();
     } catch (IOException e) {
       throw new LinkyIOException(e);
     }
@@ -81,17 +67,26 @@ public class MappedFile implements Lifecycle {
     }
   }
 
-  public void write(long offset, ByteBuffer byteBuffer) {
+  @Override
+  public void write(ByteBuffer byteBuffer, long offset) {
     try {
       int size = byteBuffer.limit();
-      channel.position(offset - startOffset);
-      channel.write(byteBuffer);
-      this.writeOffset += size;
+      int writtenBytes = 0;
+      for (; ; ) {
+        writtenBytes += channel.write(byteBuffer, offset - startOffset + writtenBytes);
+        this.writeOffset += size;
+        if (writtenBytes != size) {
+          continue;
+        } else {
+          break;
+        }
+      }
     } catch (IOException e) {
       throw new LinkyIOException(e);
     }
   }
 
+  @Override
   public void force() {
     try {
       long writeOffset = this.writeOffset;
@@ -102,55 +97,63 @@ public class MappedFile implements Lifecycle {
     }
   }
 
-  public CompletableFuture<ByteBuffer> asyncRead(long position, int size) {
-    int relativePosition = (int) (position - startOffset);
-    ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
-    byteBuffer.position(relativePosition);
-    byteBuffer.limit(relativePosition + size);
-    return CompletableFuture.completedFuture(byteBuffer);
-  }
-
+  @Override
   public ByteBuffer read(long position, int size) {
+    ByteBuffer buf = ByteBuffer.allocateDirect(size);
+    position -= startOffset;
     try {
-      return asyncRead(position, size).get();
-    } catch (Exception e) {
+      int totalReadBytes = 0;
+      for (; ; ) {
+        totalReadBytes += channel.read(buf, position + totalReadBytes);
+        if (totalReadBytes != size) {
+          continue;
+        } else {
+          break;
+        }
+      }
+    } catch (IOException e) {
       throw new LinkyIOException(e);
     }
+    buf.flip();
+    return buf;
   }
 
+  @Override
   public int remaining() {
     return fileSize - (int) (writeOffset - startOffset);
   }
 
+  @Override
   public long length() {
     return this.length;
   }
 
-  public long getStartOffset() {
+  @Override
+  public long startOffset() {
     return this.startOffset;
   }
 
-  public long getWriteOffset() {
+  @Override
+  public long writeOffset() {
     return this.writeOffset;
   }
 
-  public void setWriteOffset(long writeOffset) {
+  @Override
+  public void writeOffset(long writeOffset) {
     this.writeOffset = writeOffset;
-    try {
-      channel.position(this.writeOffset - this.startOffset);
-    } catch (IOException e) {
-      throw new LinkyIOException(e);
-    }
   }
 
-  public void setConfirmOffset(long confirmOffset) {
+  @Override
+  public void confirmOffset(long confirmOffset) {
     this.confirmOffset = confirmOffset;
   }
 
-  public long getConfirmOffset() {
+  @Override
+  public long confirmOffset() {
     return this.confirmOffset;
   }
 
+  @Override
   public void delete() {
     try {
       Files.delete(Paths.get(file));

@@ -22,7 +22,7 @@ import org.superhx.linky.service.proto.SegmentMeta;
 
 public class PersistenceFactoryImpl implements PersistenceFactory {
   private LocalSegmentManager localSegmentManager;
-  private WriteAheadLog writeAheadLog;
+  private Journal journal;
   private IndexBuilder indexBuilder;
   private BrokerContext brokerContext;
 
@@ -42,34 +42,34 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
   }
 
   @Override
-  public synchronized WriteAheadLog newWriteAheadLog() {
-    if (writeAheadLog != null) {
-      return writeAheadLog;
+  public synchronized Journal newWriteAheadLog() {
+    if (journal != null) {
+      return journal;
     }
-    writeAheadLog = new LocalWriteAheadLog(brokerContext.getStorePath() + "/wal/0/logs");
+    journal = new JournalImpl(brokerContext.getStorePath() + "/wal/0/logs");
     indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/0/index");
-    indexBuilder.setWriteAheadLog(writeAheadLog);
+    indexBuilder.setJournal(journal);
     indexBuilder.setLocalSegmentManager(localSegmentManager);
-    writeAheadLog.registerAppendHook(indexBuilder);
-    return writeAheadLog;
+    journal.registerAppendHook(indexBuilder);
+    return journal;
   }
 
   @Override
   public void init() {
     newWriteAheadLog();
-    writeAheadLog.init();
+    journal.init();
     indexBuilder.init();
   }
 
   @Override
   public void start() {
-    writeAheadLog.start();
+    journal.start();
     indexBuilder.start();
   }
 
   @Override
   public void shutdown() {
-    writeAheadLog.shutdown();
+    journal.shutdown();
     indexBuilder.shutdown();
   }
 

@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 @Threads(8)
 public class MappedFilesPerfTest {
   private static final String path = System.getProperty("user.home") + "/linkytest/mappedfilestest";
-  private MappedFiles mappedFiles;
+  private ChannelFiles channelFiles;
 
   @Param(value = {"128"})
   private int blockSize = 1024;
@@ -45,9 +45,9 @@ public class MappedFilesPerfTest {
 
   @Setup(value = Level.Iteration)
   public void setUp() {
-    mappedFiles = new MappedFiles(path, 1024 * 1024 * 1024, (mappedFile, lso) -> lso, null);
-    mappedFiles.init();
-    mappedFiles.start();
+    channelFiles = new ChannelFiles(path, 1024 * 1024 * 1024, (mappedFile, lso) -> lso, null);
+    channelFiles.init();
+    channelFiles.start();
 
     data = new byte[blockSize];
     new Random().nextBytes(data);
@@ -55,13 +55,13 @@ public class MappedFilesPerfTest {
 
   @TearDown(value = Level.Iteration)
   public void tearDown() {
-    mappedFiles.delete();
-    mappedFiles = null;
+    channelFiles.delete();
+    channelFiles = null;
   }
 
   @Benchmark
   public void perf() {
-    mappedFiles.append(ByteBuffer.wrap(data));
+    channelFiles.append(ByteBuffer.wrap(data));
   }
 
   public static void main(String... args) throws RunnerException {

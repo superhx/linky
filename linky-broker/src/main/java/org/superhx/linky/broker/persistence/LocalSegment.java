@@ -59,24 +59,24 @@ public class LocalSegment implements Segment {
 
   private long endOffset = NO_OFFSET;
 
-  private WriteAheadLog wal;
+  private Journal journal;
   private BrokerContext brokerContext;
   private DataNodeCnx dataNodeCnx;
   private String storePath;
-  private MappedFiles mappedFiles;
+  private ChannelFiles files;
   boolean sinking = false;
   private ScheduledFuture<?> followerScanner;
 
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
 
-  public LocalSegment(SegmentMeta meta, WriteAheadLog wal, BrokerContext brokerContext) {
+  public LocalSegment(SegmentMeta meta, Journal journal, BrokerContext brokerContext) {
     this.storePath =
         String.format(
             "%s/segments/%s/%s/%s",
             brokerContext.getStorePath(), meta.getTopicId(), meta.getPartition(), meta.getIndex());
-    mappedFiles =
-        new MappedFiles(
+    files =
+        new ChannelFiles(
             this.storePath,
             fileSize,
             (mappedFile, lso) -> {
@@ -103,13 +103,13 @@ public class LocalSegment implements Segment {
     this.index = meta.getIndex();
     this.segmentId =
         String.format("%s-%s-%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
-    this.wal = wal;
+    this.journal = journal;
 
     this.brokerContext = brokerContext;
     this.dataNodeCnx = brokerContext.getDataNodeCnx();
     this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
-    this.confirmOffset = this.startOffset + mappedFiles.getConfirmOffset() / INDEX_UNIT_SIZE;
+    this.confirmOffset = this.startOffset + files.confirmOffset() / INDEX_UNIT_SIZE;
     this.nextOffset.set(confirmOffset);
 
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
@@ -146,12 +146,12 @@ public class LocalSegment implements Segment {
 
   @Override
   public void init() {
-    mappedFiles.init();
+    files.init();
   }
 
   @Override
   public void start() {
-    mappedFiles.start();
+    files.start();
   }
 
   @Override
@@ -166,7 +166,7 @@ public class LocalSegment implements Segment {
     for (Follower follower : followers) {
       follower.shutdown();
     }
-    mappedFiles.shutdown();
+    files.shutdown();
   }
 
   private void initReplicator() {
@@ -207,7 +207,7 @@ public class LocalSegment implements Segment {
               .setSegmentIndex(index)
               .build();
 
-      WriteAheadLog.AppendResult walFuture = wal.append(batchRecord);
+      CompletableFuture<Journal.AppendResult> walFuture = journal.append(new BatchRecordJournalData(batchRecord));
       waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(offset)));
 
       SegmentServiceProto.ReplicateRequest replicateRequest =
@@ -260,7 +260,7 @@ public class LocalSegment implements Segment {
     }
     long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
 
-    wal.append(batchRecord)
+    journal.append(new BatchRecordJournalData(batchRecord))
         .thenAccept(
             r -> {
               this.confirmOffset = replicaConfirmOffset;
@@ -280,19 +280,19 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
-    return mappedFiles
+    return files
         .read((offset - this.startOffset) * 12, 12)
         .thenCompose(
             index -> {
               long physicalOffset = index.getLong();
               int size = index.getInt();
-              return wal.get(physicalOffset, size);
+              return journal.get(physicalOffset, size);
             });
   }
 
   @Override
   public void putIndex(Index index) {
-    long expectNextOffset = this.startOffset + mappedFiles.getWriteOffset() / INDEX_UNIT_SIZE;
+    long expectNextOffset = this.startOffset + files.writeOffset() / INDEX_UNIT_SIZE;
     if (expectNextOffset != index.getOffset()) {
       log.warn("{} {} not match expect nextOffset {}", segmentId, index, expectNextOffset);
       return;
@@ -304,7 +304,7 @@ public class LocalSegment implements Segment {
     buf.putLong(index.getPhysicalOffset());
     buf.putInt(index.getSize());
     buf.flip();
-    mappedFiles.append(buf);
+    files.append(buf);
   }
 
   @Override
@@ -344,7 +344,7 @@ public class LocalSegment implements Segment {
                 }
                 log.info("sync sink {}", batchRecord);
                 long confirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
-                wal.append(batchRecord)
+                journal.append(new BatchRecordJournalData(batchRecord))
                     .thenAccept(r -> LocalSegment.this.confirmOffset = confirmOffset);
               }
 
@@ -395,14 +395,14 @@ public class LocalSegment implements Segment {
 
   @Override
   public void forceIndex() {
-    mappedFiles.force();
+    files.force();
   }
 
   @Override
   public void truncateDirtyIndex(long physicalOffset) {
     try {
-      for (long offset = mappedFiles.getConfirmOffset(); offset > 0; offset = offset - 12) {
-        ByteBuffer index = mappedFiles.read(offset - INDEX_UNIT_SIZE, 12).get();
+      for (long offset = files.confirmOffset(); offset > 0; offset = offset - 12) {
+        ByteBuffer index = files.read(offset - INDEX_UNIT_SIZE, 12).get();
         long indexPhysicalOffset = index.getLong();
       }
     } catch (Exception e) {
@@ -691,4 +691,5 @@ public class LocalSegment implements Segment {
       }
     }
   }
+
 }
