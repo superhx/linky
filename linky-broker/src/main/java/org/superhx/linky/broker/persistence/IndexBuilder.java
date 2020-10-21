@@ -26,7 +26,7 @@ import java.util.concurrent.*;
 
 import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
 
-public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>, Lifecycle {
+public class IndexBuilder implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private String storePath;
   private Status status;
@@ -34,7 +34,7 @@ public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>,
   private Journal<BatchRecordJournalData> journal;
   private long walSlo;
   private Checkpoint checkpoint;
-  private BlockingQueue<WaitingIndex> waitingPutIndexes = new LinkedBlockingQueue<>();
+  private BlockingQueue<BatchIndex> waitingPutIndexes = new LinkedBlockingQueue<>();
   private ExecutorService putIndexExecutor = Utils.newFixedThreadPool(1, "IndexBuilderPut-");
   private ScheduledExecutorService forceIndexScheduler =
       Utils.newScheduledThreadPool(1, "IndexBuilderForce-");
@@ -88,26 +88,43 @@ public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>,
         physicalOffset += record.getSize();
         continue;
       }
-      afterAppend(record);
+      BatchRecord batchRecord = ((BatchRecordJournalData) record.getData()).getBatchRecord();
+      BatchIndex index =
+          IndexBuilder.BatchIndex.newBuilder()
+              .setTopicId(batchRecord.getTopicId())
+              .setPartition(batchRecord.getPartition())
+              .setSegmentIndex(batchRecord.getSegmentIndex())
+              .setCount(batchRecord.getRecordsCount())
+              .setPhysicalOffset(record.getOffset())
+              .setSize(record.getSize())
+              .build();
+      putIndex(index);
       physicalOffset += record.getSize();
     }
+  }
+
+  public void putIndex(BatchIndex batchIndex) {
+    waitingPutIndexes.offer(batchIndex);
   }
 
   protected void doPutIndex() {
     for (; ; ) {
       try {
-        WaitingIndex waitingIndex = waitingPutIndexes.take();
+        BatchIndex batchIndex = waitingPutIndexes.take();
         Segment segment =
             localSegmentManager.getSegment(
-                waitingIndex.getTopicId(),
-                waitingIndex.getPartition(),
-                waitingIndex.getSegmentIndex());
+                batchIndex.getTopicId(), batchIndex.getPartition(), batchIndex.getSegmentIndex());
         if (segment == null) {
-          log.info("cannot find segment for index {}", waitingIndex);
+          log.info("cannot find segment for index {}", batchIndex);
           continue;
         }
-        segment.putIndex(waitingIndex.getIndex());
-        walSlo = waitingIndex.getIndex().getPhysicalOffset() + waitingIndex.getIndex().getSize();
+        for (long offset = batchIndex.getOffset();
+            offset < batchIndex.getOffset() + batchIndex.getCount();
+            offset++) {
+          segment.putIndex(
+              new Segment.Index(offset, batchIndex.getPhysicalOffset(), batchIndex.getSize()));
+        }
+        walSlo = batchIndex.getPhysicalOffset() + batchIndex.getSize();
       } catch (InterruptedException e) {
         if (status == Status.SHUTDOWN) {
           break;
@@ -133,36 +150,14 @@ public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>,
     this.journal = journal;
   }
 
-  @Override
-  public void afterAppend(Journal.Record<BatchRecordJournalData> record) {
-    BatchRecord batchRecord = record.getData().getBatchRecord();
-    int topicId = batchRecord.getTopicId();
-    int partition = batchRecord.getPartition();
-    int segmentIndex = batchRecord.getSegmentIndex();
-    for (long offset = batchRecord.getFirstOffset();
-        offset < batchRecord.getFirstOffset() + batchRecord.getRecordsCount();
-        offset++) {
-      waitingPutIndexes.offer(
-          new WaitingIndex(
-              topicId,
-              partition,
-              segmentIndex,
-              new Segment.Index(offset, record.getOffset(), record.getSize())));
-    }
-  }
-
-  static class WaitingIndex {
+  static class BatchIndex {
     private int topicId;
     private int partition;
     private int segmentIndex;
-    private Segment.Index index;
-
-    public WaitingIndex(int topicId, int partition, int segmentIndex, Segment.Index index) {
-      this.topicId = topicId;
-      this.partition = partition;
-      this.segmentIndex = segmentIndex;
-      this.index = index;
-    }
+    private long offset;
+    private long physicalOffset;
+    private int size;
+    private int count;
 
     public int getTopicId() {
       return topicId;
@@ -176,8 +171,81 @@ public class IndexBuilder implements Journal.AppendHook<BatchRecordJournalData>,
       return segmentIndex;
     }
 
-    public Segment.Index getIndex() {
-      return index;
+    public long getOffset() {
+      return offset;
+    }
+
+    public long getPhysicalOffset() {
+      return physicalOffset;
+    }
+
+    public int getSize() {
+      return size;
+    }
+
+    public int getCount() {
+      return count;
+    }
+
+    public static Builder newBuilder() {
+      return new Builder();
+    }
+  }
+
+  static class Builder {
+    private int topicId;
+    private int partition;
+    private int segmentIndex;
+    private long offset;
+    private int count;
+    private long physicalOffset;
+    private int size;
+
+    public Builder setTopicId(int topicId) {
+      this.topicId = topicId;
+      return this;
+    }
+
+    public Builder setPartition(int partition) {
+      this.partition = partition;
+      return this;
+    }
+
+    public Builder setSegmentIndex(int segmentIndex) {
+      this.segmentIndex = segmentIndex;
+      return this;
+    }
+
+    public Builder setOffset(long offset) {
+      this.offset = offset;
+      return this;
+    }
+
+    public Builder setCount(int count) {
+      this.count = count;
+      return this;
+    }
+
+    public Builder setPhysicalOffset(long physicalOffset) {
+      this.physicalOffset = physicalOffset;
+      return this;
+    }
+
+    public Builder setSize(int size) {
+      this.size = size;
+      return this;
+    }
+
+    public BatchIndex build() {
+      BatchIndex batchIndex = new BatchIndex();
+      batchIndex.topicId = topicId;
+      batchIndex.partition = partition;
+      batchIndex.segmentIndex = segmentIndex;
+      batchIndex.offset = offset;
+      batchIndex.count = count;
+      batchIndex.physicalOffset = physicalOffset;
+      batchIndex.size = size;
+      return batchIndex;
     }
   }
 

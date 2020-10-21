@@ -12,15 +12,13 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
 
   CompletableFuture<Record<T>> get(long offset);
 
-  void registerAppendHook(AppendHook<T> hook);
-
   long getStartOffset();
 
   long getConfirmOffset();
 
   void delete();
 
-  class AppendResult extends CompletableFuture<AppendResult>{
+  class AppendResult {
     private long offset;
     private int size;
 
@@ -111,9 +109,5 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
 
   interface RecordData {
     byte[] toByteArray();
-  }
-
-  interface AppendHook<T extends RecordData> {
-    void afterAppend(Record<T> record);
   }
 }

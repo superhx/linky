@@ -18,31 +18,64 @@ package org.superhx.linky.broker.persistence;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.Configuration;
 import org.superhx.linky.broker.Utils;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 public abstract class AbstractJournal<T extends Journal.RecordData> implements Journal {
   public static final int RECORD_MAGIC_CODE = -19951994;
   public static final int BLANK_MAGIC_CODE = -2333;
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private static final int fileSize = 1024 * 1024 * 1024;
-  private static final int MAX_WAITING_BYTES = 1024 * 1024 * 4;
   private static final int HEADER_SIZE = 4 + 4;
-  private List<AppendHook> appendHookList = new CopyOnWriteArrayList<>();
-  private ChannelFiles channelFiles;
-  private ConcurrentLinkedQueue<AppendResult> waitingConfirm = new ConcurrentLinkedQueue<>();
-  private ScheduledExecutorService forceExecutor =
-      Utils.newScheduledThreadPool(1, "LocalWriteAheadLogForce-");
-  private AtomicLong waitingConfirmBytes = new AtomicLong();
 
-  public AbstractJournal(String storePath) {
-    this.channelFiles =
+  public static final String MAX_WAITING_APPEND_RECORD_COUNT_KEY =
+      "MAX_WAITING_APPEND_RECORD_COUNT";
+  private static final int DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT = 4096;
+
+  public static final String MAX_WAITING_APPEND_BYTES_KEY = "MAX_WAITING_APPEND_BYTES";
+  private static final int DEFAULT_MAX_WAITING_APPEND_BYTES = 1024 * 1024 * 32;
+
+  public static final String GROUP_APPEND_BATCH_SIZE_KEY = "GROUP_APPEND_BATCH_SIZE";
+  private static final int DEFAULT_GROUP_APPEND_BATCH_SIZE = 1024 * 1024 * 16;
+
+  public static final String GROUP_APPEND_INTERVAL_KEY = "GROUP_APPEND_INTERVAL";
+  private static final long DEFAULT_GROUP_APPEND_INTERVAL = 200;
+
+  public static final String MAX_WAITING_FORCE_BYTES_KEY = "DEFAULT_MAX_WAITING_FORCE_BYTES";
+  private static final int DEFAULT_MAX_WAITING_FORCE_BYTES = 1024 * 1024 * 32;
+
+  public static final String FORCE_INTERVAL_KEY = "FORCE_INTERVAL";
+  private static final long DEFAULT_FORCE_INTERVAL = 1000;
+
+  private ChannelFiles iFiles;
+
+  private final int maxWaitingAppendBytes;
+  private final AtomicLong waitingAppendBytes = new AtomicLong();
+  private final int groupAppendBatchSize;
+  private final ByteBuffer groupAppendBuffer;
+  private final BlockingQueue<WaitingAppend> waitingGroupAppend;
+  private final long groupAppendInterval;
+  private final ScheduledExecutorService groupAppendExecutor =
+      Utils.newScheduledThreadPool(1, "LocalWriteAheadLogGroupAppend-");
+
+  private final int maxWaitingForceBytes;
+  private final AtomicLong waitingForceBytes = new AtomicLong();
+  private final ConcurrentLinkedQueue<WaitingForce> waitingConfirm = new ConcurrentLinkedQueue<>();
+  private final long forceInterval;
+  private final ScheduledExecutorService forceExecutor =
+      Utils.newScheduledThreadPool(1, "LocalWriteAheadLogForce-");
+
+  public AbstractJournal(String storePath, Configuration config) {
+    this.iFiles =
         new ChannelFiles(
             storePath,
             fileSize,
@@ -51,15 +84,21 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
               int size = header.getInt();
               int magicCode = header.getInt();
               if (size == 0) {
-                log.debug("{} scan pos {} return noop", ifile, lso);
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return noop", ifile, lso);
+                }
               } else if (magicCode == BLANK_MAGIC_CODE) {
-                log.debug("{} scan pos {} return blank msg", ifile, lso);
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return blank msg", ifile, lso);
+                }
                 lso = ifile.startOffset() + ifile.length();
               } else if (magicCode == RECORD_MAGIC_CODE) {
-                log.debug("{} scan pos {} return msg", ifile, lso);
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return msg", ifile, lso);
+                }
                 lso += size;
               } else {
-                log.debug("{} scan pos {} unknown magic", ifile, lso);
+                log.error("{} scan pos {} unknown magic", ifile, lso);
                 throw new RuntimeException();
               }
               return lso;
@@ -72,22 +111,46 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
               buf.flip();
               return buf;
             });
+
+    maxWaitingAppendBytes =
+        config.getInt(MAX_WAITING_APPEND_BYTES_KEY, DEFAULT_MAX_WAITING_APPEND_BYTES);
+    groupAppendBatchSize =
+        config.getInt(GROUP_APPEND_BATCH_SIZE_KEY, DEFAULT_GROUP_APPEND_BATCH_SIZE);
+    groupAppendBuffer = ByteBuffer.allocateDirect(groupAppendBatchSize);
+    waitingGroupAppend =
+        new ArrayBlockingQueue<>(
+            config.getInt(
+                MAX_WAITING_APPEND_RECORD_COUNT_KEY, DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT));
+    groupAppendInterval = config.getLong(GROUP_APPEND_INTERVAL_KEY, DEFAULT_GROUP_APPEND_INTERVAL);
+
+    maxWaitingForceBytes =
+        config.getInt(MAX_WAITING_FORCE_BYTES_KEY, DEFAULT_MAX_WAITING_FORCE_BYTES);
+    forceInterval = config.getLong(FORCE_INTERVAL_KEY, DEFAULT_FORCE_INTERVAL);
   }
 
   @Override
   public void init() {
-    channelFiles.init();
+    iFiles.init();
   }
 
   @Override
   public void start() {
-    channelFiles.start();
-    forceExecutor.scheduleAtFixedRate(() -> force(), 1, 1, TimeUnit.MILLISECONDS);
+    iFiles.start();
+    forceExecutor.scheduleAtFixedRate(
+        () -> force0(true), forceInterval, forceInterval, TimeUnit.MICROSECONDS);
+    groupAppendExecutor.scheduleWithFixedDelay(
+        () -> doAppend(null, true),
+        groupAppendInterval,
+        groupAppendInterval,
+        TimeUnit.MICROSECONDS);
   }
 
   @Override
   public void shutdown() {
-    channelFiles.shutdown();
+    doAppend(null, true);
+    force0(true);
+    iFiles.shutdown();
+    groupAppendExecutor.shutdown();
     forceExecutor.shutdown();
   }
 
@@ -100,92 +163,145 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
     byteBuffer.putInt(RECORD_MAGIC_CODE);
     byteBuffer.put(data);
     byteBuffer.flip();
-    AppendResult appendResult;
-    synchronized (this) {
-      IFiles.AppendResult mappedFileAppendResult = channelFiles.append(byteBuffer);
-      appendResult = new AppendResult(mappedFileAppendResult.getOffset(), size);
-      appendResult.thenAccept(
-          r ->
-              afterAppend(
-                  Record.newBuilder()
-                      .setOffset(r.getOffset())
-                      .setSize(r.getSize())
-                      .setData(recordData)
-                      .build()));
-      waitingConfirm.add(appendResult);
-      if (waitingConfirmBytes.addAndGet(size) > MAX_WAITING_BYTES) {
-        force();
+    WaitingAppend waitingAppend = new WaitingAppend(byteBuffer, size);
+    Consumer<AppendResult> hook = getHook(recordData);
+    waitingAppend
+        .future()
+        .thenApply(
+            r -> {
+              hook.accept(r);
+              return r;
+            });
+    if (waitingGroupAppend.offer(waitingAppend)) {
+      if (waitingAppendBytes.addAndGet(size) > maxWaitingAppendBytes) {
+        groupAppendExecutor.submit(() -> doAppend(null, false));
+      }
+    } else {
+      doAppend(waitingAppend, false);
+    }
+    return waitingAppend.future();
+  }
+
+  public synchronized void doAppend(WaitingAppend oneMore, boolean force) {
+    if (!force) {
+      if (oneMore != null) {
+        if (waitingGroupAppend.offer(oneMore)) {
+          if (waitingAppendBytes.addAndGet(oneMore.size()) < maxWaitingAppendBytes) {
+            return;
+          }
+          doAppend(null, false);
+          return;
+        }
+      } else {
+        if (waitingAppendBytes.get() < maxWaitingAppendBytes) {
+          return;
+        }
       }
     }
-    return appendResult;
+    List<WaitingAppend> waitingAppends = new ArrayList<>(waitingGroupAppend.size() + 1);
+    waitingGroupAppend.drainTo(waitingAppends);
+    if (oneMore != null) {
+      waitingAppends.add(oneMore);
+    }
+    long relatedOffset = 0;
+    List<WaitingAppend> group = new ArrayList<>(waitingAppends.size());
+    for (int i = 0; i < waitingAppends.size(); i++) {
+      WaitingAppend waitingAppend = waitingAppends.get(i);
+      int size = waitingAppend.size();
+      if (size > groupAppendBuffer.remaining() && groupAppendBuffer.position() != 0) {
+        groupAppendBuffer.flip();
+        long offset = iFiles.append(groupAppendBuffer).getOffset();
+        for (WaitingAppend w : group) {
+          this.waitingConfirm.add(
+              new WaitingForce(w.future(), new AppendResult(offset + w.relatedOffset(), w.size())));
+        }
+        waitingAppendBytes.addAndGet(-relatedOffset);
+        if (waitingForceBytes.addAndGet(relatedOffset) > maxWaitingForceBytes) {
+          forceExecutor.submit(() -> force0(false));
+        }
+        relatedOffset = 0;
+        group.clear();
+        i--;
+        continue;
+      }
+
+      if (size > groupAppendBatchSize) {
+        long offset = iFiles.append(waitingAppend.buf()).getOffset();
+        this.waitingConfirm.add(
+            new WaitingForce(
+                waitingAppend.future(),
+                new AppendResult(offset + relatedOffset, waitingAppend.size())));
+        waitingAppendBytes.addAndGet(-waitingAppend.size());
+        if (waitingForceBytes.addAndGet(relatedOffset) > maxWaitingForceBytes) {
+          forceExecutor.submit(() -> force0(false));
+        }
+        continue;
+      }
+
+      group.add(waitingAppend);
+      waitingAppend.relatedOffset(relatedOffset);
+      relatedOffset += size;
+    }
   }
 
-  public void force() {
-    forceExecutor.submit(() -> force0());
+  protected Consumer<AppendResult> getHook(RecordData recordData) {
+    return r -> {};
   }
 
-  protected void force0() {
-    long lastWaitingConfirmBytes = this.waitingConfirmBytes.get();
-    long confirmPhysicalOffset = channelFiles.force();
-    this.waitingConfirmBytes.getAndAdd(-lastWaitingConfirmBytes);
+  protected void force0(boolean force) {
+    if (!force && waitingAppendBytes.get() < maxWaitingForceBytes) {
+      return;
+    }
+    long lastWaitingConfirmBytes = this.waitingForceBytes.get();
+    long confirmPhysicalOffset = iFiles.force();
+    this.waitingForceBytes.getAndAdd(-lastWaitingConfirmBytes);
     for (; ; ) {
-      AppendResult rst = waitingConfirm.peek();
-      if (rst == null) {
+      WaitingForce waitingForce = waitingConfirm.peek();
+      if (waitingForce == null) {
         break;
       }
-      if (rst.getOffset() >= confirmPhysicalOffset) {
+      if (waitingForce.appendResult().getOffset() >= confirmPhysicalOffset) {
         break;
       }
       waitingConfirm.poll();
-      rst.complete(rst);
+      waitingForce.complete();
     }
   }
 
   @Override
   public CompletableFuture<Record<T>> get(long offset, int size) {
-    return channelFiles.read(offset, size).thenApply(b -> parse(offset, b));
+    return iFiles.read(offset, size).thenApply(b -> parse(offset, b));
   }
 
   @Override
   public CompletableFuture<Record<T>> get(long offset) {
     AtomicInteger size = new AtomicInteger();
-    return channelFiles
+    return iFiles
         .read(offset, HEADER_SIZE)
         .thenCompose(
             header -> {
               size.set(header.getInt());
-              return channelFiles.read(offset, size.get());
+              return iFiles.read(offset, size.get());
             })
         .thenApply(buf -> parse(offset, buf));
   }
 
   @Override
-  public void registerAppendHook(AppendHook hook) {
-    appendHookList.add(hook);
-  }
-
-  @Override
   public long getStartOffset() {
-    return channelFiles.startOffset();
+    return iFiles.startOffset();
   }
 
   @Override
   public long getConfirmOffset() {
-    return channelFiles.confirmOffset();
+    return iFiles.confirmOffset();
   }
 
   @Override
   public void delete() {
-    channelFiles.delete();
+    iFiles.delete();
   }
 
   protected abstract Record<T> parse(long offset, ByteBuffer byteBuffer);
-
-  protected void afterAppend(Record record) {
-    for (AppendHook appendHook : appendHookList) {
-      appendHook.afterAppend(record);
-    }
-  }
 
   public static void ensureDirOK(final String dirName) {
     if (dirName != null) {
@@ -194,6 +310,57 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
         boolean result = f.mkdirs();
         log.info(dirName + " mkdir " + (result ? "OK" : "Failed"));
       }
+    }
+  }
+
+  static class WaitingAppend {
+    private ByteBuffer buf;
+    private long relatedOffset;
+    private int size;
+    private CompletableFuture<AppendResult> future = new CompletableFuture<>();
+
+    public WaitingAppend(ByteBuffer buf, int size) {
+      this.buf = buf;
+      this.size = size;
+    }
+
+    public ByteBuffer buf() {
+      return buf;
+    }
+
+    public WaitingAppend relatedOffset(long offset) {
+      this.relatedOffset = offset;
+      return this;
+    }
+
+    public long relatedOffset() {
+      return relatedOffset;
+    }
+
+    public int size() {
+      return size;
+    }
+
+    public CompletableFuture<AppendResult> future() {
+      return future;
+    }
+  }
+
+  static class WaitingForce {
+    private CompletableFuture<AppendResult> future;
+    private AppendResult appendResult;
+
+    public WaitingForce(CompletableFuture<AppendResult> future, AppendResult appendResult) {
+      this.future = future;
+      this.appendResult = appendResult;
+    }
+
+    public AppendResult appendResult() {
+      return appendResult;
+    }
+
+    public void complete() {
+      this.future.complete(appendResult);
     }
   }
 }

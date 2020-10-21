@@ -23,6 +23,7 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
+import org.superhx.linky.broker.Configuration;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.Record;
 
@@ -45,7 +46,7 @@ public class LocalWriteAheadLogTest {
 
   @Setup(value = Level.Iteration)
   public void setUp() {
-    wal = new JournalImpl(path);
+    wal = new JournalImpl(path, new Configuration());
     wal.init();
     wal.start();
     byte[] data = new byte[blockSize];

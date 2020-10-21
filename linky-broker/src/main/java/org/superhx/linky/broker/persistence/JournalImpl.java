@@ -17,13 +17,50 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import org.superhx.linky.broker.Configuration;
 import org.superhx.linky.service.proto.BatchRecord;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 public class JournalImpl extends AbstractJournal<BatchRecordJournalData> {
-  public JournalImpl(String storePath) {
-    super(storePath);
+  private IndexBuilder indexBuilder;
+
+  public JournalImpl(String storePath, Configuration configuration) {
+    super(storePath, configuration);
+  }
+
+  @Override
+  public CompletableFuture<AppendResult> append(RecordData record) {
+    BatchRecord batchRecord = ((BatchRecordJournalData) record).getBatchRecord();
+    IndexBuilder.Builder builder =
+        IndexBuilder.BatchIndex.newBuilder()
+            .setTopicId(batchRecord.getTopicId())
+            .setPartition(batchRecord.getPartition())
+            .setSegmentIndex(batchRecord.getSegmentIndex())
+            .setCount(batchRecord.getRecordsCount());
+    return super.append(record)
+        .thenApply(
+            r -> {
+              builder.setPhysicalOffset(r.getOffset()).setSize(r.getSize());
+              indexBuilder.putIndex(builder.build());
+              return r;
+            });
+  }
+
+  @Override
+  protected Consumer<AppendResult> getHook(RecordData record) {
+    BatchRecord batchRecord = ((BatchRecordJournalData) record).getBatchRecord();
+    IndexBuilder.Builder builder =
+        IndexBuilder.BatchIndex.newBuilder()
+            .setTopicId(batchRecord.getTopicId())
+            .setPartition(batchRecord.getPartition())
+            .setSegmentIndex(batchRecord.getSegmentIndex())
+            .setCount(batchRecord.getRecordsCount());
+    return r ->
+        indexBuilder.putIndex(
+            builder.setPhysicalOffset(r.getOffset()).setSize(r.getSize()).build());
   }
 
   @Override
@@ -49,5 +86,9 @@ public class JournalImpl extends AbstractJournal<BatchRecordJournalData> {
       e.printStackTrace();
     }
     return null;
+  }
+
+  public void setIndexBuilder(IndexBuilder indexBuilder) {
+    this.indexBuilder = indexBuilder;
   }
 }

@@ -48,9 +48,10 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
     }
     journal = new JournalImpl(brokerContext.getStorePath() + "/wal/0/logs");
     indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/0/index");
+
+    ((JournalImpl) journal).setIndexBuilder(indexBuilder);
     indexBuilder.setJournal(journal);
     indexBuilder.setLocalSegmentManager(localSegmentManager);
-    journal.registerAppendHook(indexBuilder);
     return journal;
   }
 
