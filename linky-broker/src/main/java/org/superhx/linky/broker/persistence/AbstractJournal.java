@@ -39,7 +39,7 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
 
   public static final String MAX_WAITING_APPEND_RECORD_COUNT_KEY =
       "MAX_WAITING_APPEND_RECORD_COUNT";
-  private static final int DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT = 4096;
+  private static final int DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT = 4096 * 64;
 
   public static final String MAX_WAITING_APPEND_BYTES_KEY = "MAX_WAITING_APPEND_BYTES";
   private static final int DEFAULT_MAX_WAITING_APPEND_BYTES = 1024 * 1024 * 32;
@@ -177,6 +177,7 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
         groupAppendExecutor.submit(() -> doAppend(null, false));
       }
     } else {
+      System.out.println("force append");
       doAppend(waitingAppend, false);
     }
     return waitingAppend.future();

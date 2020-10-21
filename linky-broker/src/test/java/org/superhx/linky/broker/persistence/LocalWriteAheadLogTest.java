@@ -69,12 +69,16 @@ public class LocalWriteAheadLogTest {
   }
 
   public static void main(String... args) throws RunnerException {
-    Options opt =
-        new OptionsBuilder()
-            .include(LocalWriteAheadLogTest.class.getSimpleName())
-            .result("result.json")
-            .resultFormat(ResultFormatType.JSON)
-            .build();
-    new Runner(opt).run();
+//    Options opt =
+//        new OptionsBuilder()
+//            .include(LocalWriteAheadLogTest.class.getSimpleName())
+//            .result("result.json")
+//            .resultFormat(ResultFormatType.JSON)
+//            .build();
+//    new Runner(opt).run();
+      LocalWriteAheadLogTest t =  new LocalWriteAheadLogTest();
+      t.setUp();
+      t.perf();
+      t.tearDown();
   }
 }

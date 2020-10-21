@@ -33,35 +33,22 @@ public class JournalImpl extends AbstractJournal<BatchRecordJournalData> {
 
   @Override
   public CompletableFuture<AppendResult> append(RecordData record) {
-    BatchRecord batchRecord = ((BatchRecordJournalData) record).getBatchRecord();
-    IndexBuilder.Builder builder =
-        IndexBuilder.BatchIndex.newBuilder()
-            .setTopicId(batchRecord.getTopicId())
-            .setPartition(batchRecord.getPartition())
-            .setSegmentIndex(batchRecord.getSegmentIndex())
-            .setCount(batchRecord.getRecordsCount());
-    return super.append(record)
-        .thenApply(
-            r -> {
-              builder.setPhysicalOffset(r.getOffset()).setSize(r.getSize());
-              indexBuilder.putIndex(builder.build());
-              return r;
-            });
+    return super.append(record);
   }
 
-  @Override
-  protected Consumer<AppendResult> getHook(RecordData record) {
-    BatchRecord batchRecord = ((BatchRecordJournalData) record).getBatchRecord();
-    IndexBuilder.Builder builder =
-        IndexBuilder.BatchIndex.newBuilder()
-            .setTopicId(batchRecord.getTopicId())
-            .setPartition(batchRecord.getPartition())
-            .setSegmentIndex(batchRecord.getSegmentIndex())
-            .setCount(batchRecord.getRecordsCount());
-    return r ->
-        indexBuilder.putIndex(
-            builder.setPhysicalOffset(r.getOffset()).setSize(r.getSize()).build());
-  }
+//  @Override
+//  protected Consumer<AppendResult> getHook(RecordData record) {
+//    BatchRecord batchRecord = ((BatchRecordJournalData) record).getBatchRecord();
+//    IndexBuilder.Builder builder =
+//        IndexBuilder.BatchIndex.newBuilder()
+//            .setTopicId(batchRecord.getTopicId())
+//            .setPartition(batchRecord.getPartition())
+//            .setSegmentIndex(batchRecord.getSegmentIndex())
+//            .setCount(batchRecord.getRecordsCount());
+//    return r ->
+//        indexBuilder.putIndex(
+//            builder.setPhysicalOffset(r.getOffset()).setSize(r.getSize()).build());
+//  }
 
   @Override
   protected Record<BatchRecordJournalData> parse(long offset, ByteBuffer byteBuffer) {

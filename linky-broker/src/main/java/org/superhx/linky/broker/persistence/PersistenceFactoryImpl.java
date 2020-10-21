@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import org.superhx.linky.broker.BrokerContext;
+import org.superhx.linky.broker.Configuration;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
@@ -46,7 +47,7 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
     if (journal != null) {
       return journal;
     }
-    journal = new JournalImpl(brokerContext.getStorePath() + "/wal/0/logs");
+    journal = new JournalImpl(brokerContext.getStorePath() + "/wal/0/logs", new Configuration());
     indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/0/index");
 
     ((JournalImpl) journal).setIndexBuilder(indexBuilder);
