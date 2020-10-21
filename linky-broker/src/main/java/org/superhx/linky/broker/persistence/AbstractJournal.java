@@ -39,7 +39,7 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
 
   public static final String MAX_WAITING_APPEND_RECORD_COUNT_KEY =
       "MAX_WAITING_APPEND_RECORD_COUNT";
-  private static final int DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT = 4096 * 64;
+  private static final int DEFAULT_MAX_WAITING_APPEND_RECORD_COUNT = 4096;
 
   public static final String MAX_WAITING_APPEND_BYTES_KEY = "MAX_WAITING_APPEND_BYTES";
   private static final int DEFAULT_MAX_WAITING_APPEND_BYTES = 1024 * 1024 * 32;
@@ -48,7 +48,7 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
   private static final int DEFAULT_GROUP_APPEND_BATCH_SIZE = 1024 * 1024 * 16;
 
   public static final String GROUP_APPEND_INTERVAL_KEY = "GROUP_APPEND_INTERVAL";
-  private static final long DEFAULT_GROUP_APPEND_INTERVAL = 200;
+  private static final long DEFAULT_GROUP_APPEND_INTERVAL = 100;
 
   public static final String MAX_WAITING_FORCE_BYTES_KEY = "DEFAULT_MAX_WAITING_FORCE_BYTES";
   private static final int DEFAULT_MAX_WAITING_FORCE_BYTES = 1024 * 1024 * 32;
@@ -177,7 +177,6 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
         groupAppendExecutor.submit(() -> doAppend(null, false));
       }
     } else {
-      System.out.println("force append");
       doAppend(waitingAppend, false);
     }
     return waitingAppend.future();
@@ -209,9 +208,14 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
     for (int i = 0; i < waitingAppends.size(); i++) {
       WaitingAppend waitingAppend = waitingAppends.get(i);
       int size = waitingAppend.size();
-      if (size > groupAppendBuffer.remaining() && groupAppendBuffer.position() != 0) {
+      if ((i == waitingAppends.size() - 1)
+          || (size > groupAppendBuffer.remaining() && groupAppendBuffer.position() != 0)) {
+        if (groupAppendBuffer.position() == 0) {
+          continue;
+        }
         groupAppendBuffer.flip();
         long offset = iFiles.append(groupAppendBuffer).getOffset();
+        groupAppendBuffer.clear();
         for (WaitingAppend w : group) {
           this.waitingConfirm.add(
               new WaitingForce(w.future(), new AppendResult(offset + w.relatedOffset(), w.size())));
@@ -222,23 +226,26 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
         }
         relatedOffset = 0;
         group.clear();
-        i--;
-        continue;
+        if (i == waitingAppends.size() - 1) {
+          return;
+        } else {
+          i--;
+          continue;
+        }
       }
 
       if (size > groupAppendBatchSize) {
         long offset = iFiles.append(waitingAppend.buf()).getOffset();
         this.waitingConfirm.add(
-            new WaitingForce(
-                waitingAppend.future(),
-                new AppendResult(offset + relatedOffset, waitingAppend.size())));
-        waitingAppendBytes.addAndGet(-waitingAppend.size());
-        if (waitingForceBytes.addAndGet(relatedOffset) > maxWaitingForceBytes) {
+            new WaitingForce(waitingAppend.future(), new AppendResult(offset, size)));
+        waitingAppendBytes.addAndGet(-size);
+        if (waitingForceBytes.addAndGet(size) > maxWaitingForceBytes) {
           forceExecutor.submit(() -> force0(false));
         }
         continue;
       }
 
+      groupAppendBuffer.put(waitingAppend.buf());
       group.add(waitingAppend);
       waitingAppend.relatedOffset(relatedOffset);
       relatedOffset += size;

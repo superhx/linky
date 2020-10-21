@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.results.format.ResultFormatType;
 import org.openjdk.jmh.runner.Runner;
@@ -27,6 +28,8 @@ import org.superhx.linky.broker.Configuration;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.Record;
 
+import java.nio.ByteBuffer;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.Throughput)
@@ -36,7 +39,7 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Fork(1)
 @Threads(8)
-public class LocalWriteAheadLogTest {
+public class JournalTest {
   private static final String path = System.getProperty("user.home") + "/linkytest/mappedfilestest";
   private Journal wal;
   private BatchRecordJournalData batchRecord;
@@ -46,7 +49,7 @@ public class LocalWriteAheadLogTest {
 
   @Setup(value = Level.Iteration)
   public void setUp() {
-    wal = new JournalImpl(path, new Configuration());
+    wal = new JournalPerf(path, new Configuration());
     wal.init();
     wal.start();
     byte[] data = new byte[blockSize];
@@ -68,17 +71,49 @@ public class LocalWriteAheadLogTest {
     wal.append(batchRecord);
   }
 
+  static class JournalPerf extends AbstractJournal<BatchRecordJournalData> {
+    public JournalPerf(String storePath, Configuration configuration) {
+      super(storePath, configuration);
+    }
+
+    @Override
+    public CompletableFuture<AppendResult> append(RecordData record) {
+      return super.append(record);
+    }
+
+    @Override
+    protected Record<BatchRecordJournalData> parse(long offset, ByteBuffer byteBuffer) {
+      ByteBuffer data = byteBuffer.slice();
+      int size = data.getInt();
+      int magicCode = data.getInt();
+      if (magicCode == BLANK_MAGIC_CODE) {
+        return Record.<BatchRecordJournalData>newBuilder()
+            .setBlank(true)
+            .setSize(size)
+            .setOffset(offset)
+            .build();
+      }
+      try {
+        BatchRecord batchRecord = BatchRecord.parseFrom(data);
+        return Record.<BatchRecordJournalData>newBuilder()
+            .setSize(size)
+            .setOffset(offset)
+            .setData(new BatchRecordJournalData(batchRecord))
+            .build();
+      } catch (InvalidProtocolBufferException e) {
+        e.printStackTrace();
+      }
+      return null;
+    }
+  }
+
   public static void main(String... args) throws RunnerException {
-//    Options opt =
-//        new OptionsBuilder()
-//            .include(LocalWriteAheadLogTest.class.getSimpleName())
-//            .result("result.json")
-//            .resultFormat(ResultFormatType.JSON)
-//            .build();
-//    new Runner(opt).run();
-      LocalWriteAheadLogTest t =  new LocalWriteAheadLogTest();
-      t.setUp();
-      t.perf();
-      t.tearDown();
+    Options opt =
+        new OptionsBuilder()
+            .include(JournalTest.class.getSimpleName())
+            .result("result.json")
+            .resultFormat(ResultFormatType.JSON)
+            .build();
+    new Runner(opt).run();
   }
 }
