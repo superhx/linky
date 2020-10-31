@@ -36,7 +36,8 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
 
   @Override
   public Segment newSegment(SegmentMeta segmentMeta) {
-    Segment segment = new LocalSegment(segmentMeta, newWriteAheadLog(), brokerContext);
+    Segment segment =
+        new LocalSegment(segmentMeta, brokerContext);
     segment.init();
     segment.start();
     return segment;
@@ -47,8 +48,8 @@ public class PersistenceFactoryImpl implements PersistenceFactory {
     if (journal != null) {
       return journal;
     }
-    journal = new JournalImpl(brokerContext.getStorePath() + "/wal/0/logs", new Configuration());
-    indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/wal/0/index");
+    journal = new JournalImpl(brokerContext.getStorePath() + "/linky/0/logs", new Configuration());
+    indexBuilder = new IndexBuilder(brokerContext.getStorePath() + "/linky/0/index");
 
     ((JournalImpl) journal).setIndexBuilder(indexBuilder);
     indexBuilder.setJournal(journal);

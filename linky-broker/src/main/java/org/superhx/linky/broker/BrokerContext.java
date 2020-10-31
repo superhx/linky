@@ -16,6 +16,8 @@
  */
 package org.superhx.linky.broker;
 
+import org.superhx.linky.broker.persistence.ChunkManager;
+import org.superhx.linky.broker.persistence.PersistenceFactory;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.service.proto.NodeMeta;
 
@@ -23,6 +25,8 @@ public class BrokerContext {
   private String storePath;
   private DataNodeCnx dataNodeCnx;
   private NodeMeta.Builder nodeMeta = NodeMeta.newBuilder();
+  private PersistenceFactory persistenceFactory;
+  private ChunkManager chunkManager;
 
   public String getAddress() {
     return nodeMeta.getAddress();
@@ -70,5 +74,21 @@ public class BrokerContext {
 
   public void setNodeMeta(NodeMeta nodeMeta) {
     this.nodeMeta = nodeMeta.toBuilder();
+  }
+
+  public PersistenceFactory getPersistenceFactory() {
+    return persistenceFactory;
+  }
+
+  public void setPersistenceFactory(PersistenceFactory persistenceFactory) {
+    this.persistenceFactory = persistenceFactory;
+  }
+
+  public ChunkManager getChunkManager() {
+    return chunkManager;
+  }
+
+  public void setChunkManager(ChunkManager chunkManager) {
+    this.chunkManager = chunkManager;
   }
 }

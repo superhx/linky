@@ -56,6 +56,7 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
   public static final String FORCE_INTERVAL_KEY = "FORCE_INTERVAL";
   private static final long DEFAULT_FORCE_INTERVAL = 1000;
 
+  private String path;
   private ChannelFiles iFiles;
 
   private final int maxWaitingAppendBytes;
@@ -75,9 +76,11 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
       Utils.newScheduledThreadPool(1, "LocalWriteAheadLogForce-");
 
   public AbstractJournal(String storePath, Configuration config) {
+    this.path = storePath;
     this.iFiles =
         new ChannelFiles(
-            storePath,
+            path,
+            "linkylog",
             fileSize,
             (ifile, lso) -> {
               ByteBuffer header = ifile.read(lso, 8);
@@ -152,6 +155,11 @@ public abstract class AbstractJournal<T extends Journal.RecordData> implements J
     iFiles.shutdown();
     groupAppendExecutor.shutdown();
     forceExecutor.shutdown();
+  }
+
+  @Override
+  public String getPath() {
+    return this.path;
   }
 
   @Override

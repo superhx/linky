@@ -18,6 +18,8 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
 
   void delete();
 
+  String getPath();
+
   class AppendResult {
     private long offset;
     private int size;

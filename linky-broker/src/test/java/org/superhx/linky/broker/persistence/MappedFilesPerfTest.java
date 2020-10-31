@@ -45,7 +45,7 @@ public class MappedFilesPerfTest {
 
   @Setup(value = Level.Iteration)
   public void setUp() {
-    channelFiles = new ChannelFiles(path, 1024 * 1024 * 1024, (mappedFile, lso) -> lso, null);
+    channelFiles = new ChannelFiles(path, "mappedfilesperftest",1024 * 1024 * 1024, (mappedFile, lso) -> lso, null);
     channelFiles.init();
     channelFiles.start();
 

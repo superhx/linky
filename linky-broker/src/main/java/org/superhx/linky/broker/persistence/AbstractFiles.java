@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
 public abstract class AbstractFiles implements IFiles {
   public static final long NO_OFFSET = -1;
   private String path;
+  private String filePrefix;
   private int fileSize;
   private ChannelFiles.Checkpoint checkpoint;
   private List<IFile> files = new CopyOnWriteArrayList<>();
@@ -44,10 +45,12 @@ public abstract class AbstractFiles implements IFiles {
 
   public AbstractFiles(
       String path,
+      String filePrefix,
       int fileSize,
       BiFunction<IFile, Long, Long> dataChecker,
       Function<Integer, ByteBuffer> blankFiller) {
     this.path = path;
+    this.filePrefix = filePrefix;
     this.fileSize = fileSize;
     this.blankFiller = blankFiller;
 
@@ -60,7 +63,7 @@ public abstract class AbstractFiles implements IFiles {
     }
     List<File> dataFiles =
         Arrays.asList(filesInDir).stream()
-            .filter(f -> !f.getName().contains("json"))
+            .filter(f -> f.getName().startsWith(filePrefix))
             .sorted(Comparator.comparing(f -> Long.valueOf(f.getName())))
             .collect(Collectors.toList());
     long lso = this.checkpoint.getSlo();
@@ -118,7 +121,8 @@ public abstract class AbstractFiles implements IFiles {
     for (; ; ) {
       IFile last = this.last;
       if (last == null) {
-        this.last = new ChannelFile(this.path + "/" + Utils.offset2FileName(0), fileSize);
+        this.last =
+            newFile(this.path + "/" + filePrefix + "." + Utils.offset2FileName(0), fileSize);
         this.files.add(this.last);
         this.startOffsets.put(this.last.startOffset(), this.last);
         last = this.last;
@@ -131,7 +135,9 @@ public abstract class AbstractFiles implements IFiles {
         }
         last.force();
         this.last =
-            new ChannelFile(this.path + "/" + Utils.offset2FileName(last.writeOffset()), fileSize);
+            newFile(
+                this.path + "/" + filePrefix + "." + Utils.offset2FileName(last.writeOffset()),
+                fileSize);
         files.add(this.last);
         this.startOffsets.put(this.last.startOffset(), this.last);
         this.writeOffset.set(this.last.startOffset());

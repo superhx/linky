@@ -16,13 +16,34 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import org.junit.Before;
+import org.superhx.linky.broker.Lifecycle;
+import org.superhx.linky.service.proto.BatchRecord;
 
-import java.nio.ByteBuffer;
+import java.util.concurrent.CompletableFuture;
 
-public class MappedFilesTest extends IFilesTest {
-  @Before
-  public void setup() {
-    ifiles = new MappedFiles(path, "test", 1024, (m, s) -> 0L, (s) -> ByteBuffer.allocate(s));
+public interface Chunk extends Lifecycle {
+
+  String name();
+
+  CompletableFuture<Void> append(BatchRecord batchRecord);
+
+  CompletableFuture<BatchRecord> get(long offset);
+
+  long getConfirmOffset();
+
+  void putIndex(Index index);
+
+  void forceIndex();
+
+  class AppendResult {
+    private long offset;
+
+    public AppendResult(long offset) {
+      this.offset = offset;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
   }
 }

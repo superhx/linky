@@ -47,6 +47,7 @@ public interface IFiles extends Lifecycle {
   class Checkpoint {
     private String path;
     private long slo;
+    private boolean changed;
 
     public Checkpoint() {}
 
@@ -54,6 +55,7 @@ public interface IFiles extends Lifecycle {
       Checkpoint checkpoint = Utils.file2jsonObj(path, Checkpoint.class);
       if (checkpoint == null) {
         checkpoint = new Checkpoint();
+        checkpoint.changed = true;
       }
       checkpoint.path = path;
       return checkpoint;
@@ -65,10 +67,13 @@ public interface IFiles extends Lifecycle {
 
     public void setSlo(long slo) {
       this.slo = slo;
+      changed = true;
     }
 
     public void persist() {
-      Utils.jsonObj2file(this, path);
+      if (changed) {
+        Utils.jsonObj2file(this, path);
+      }
     }
 
     public void delete() {

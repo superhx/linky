@@ -30,8 +30,8 @@ import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -40,10 +40,8 @@ import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.R
 
 public class LocalSegment implements Segment {
   private static final Logger log = LoggerFactory.getLogger(LocalSegment.class);
-  private static final int fileSize = 12 * 1024;
-  private static final int INDEX_UNIT_SIZE = 12;
   private SegmentMeta.Builder meta;
-  private int topic;
+  private int topicId;
   private int partition;
   private int index;
   private final String segmentId;
@@ -53,63 +51,53 @@ public class LocalSegment implements Segment {
   private Role role;
   private List<Follower> followers = new CopyOnWriteArrayList<>();
 
-  private volatile long confirmOffset = NO_OFFSET;
+  private volatile long confirmOffset;
+  private long endOffset;
 
   private Queue<Waiting> waitConfirmRequests = new ConcurrentLinkedQueue<>();
 
-  private long endOffset = NO_OFFSET;
-
-  private Journal journal;
   private BrokerContext brokerContext;
   private DataNodeCnx dataNodeCnx;
-  private String storePath;
-  private ChannelFiles files;
+  private ChunkManager chunkManager;
   boolean sinking = false;
   private ScheduledFuture<?> followerScanner;
+  private Chunk lastChunk;
+  private NavigableMap<Long, Chunk> chunks = new ConcurrentSkipListMap<>();
 
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
 
-  public LocalSegment(SegmentMeta meta, Journal journal, BrokerContext brokerContext) {
-    this.storePath =
-        String.format(
-            "%s/segments/%s/%s/%s",
-            brokerContext.getStorePath(), meta.getTopicId(), meta.getPartition(), meta.getIndex());
-    files =
-        new ChannelFiles(
-            this.storePath,
-            fileSize,
-            (mappedFile, lso) -> {
-              ByteBuffer index = mappedFile.read(lso, INDEX_UNIT_SIZE);
-              long offset = index.getLong();
-              int size = index.getInt();
-              if (size == 0) {
-                if (log.isDebugEnabled()) {
-                  log.debug("{} scan pos {} return noop", mappedFile, lso);
-                }
-                return lso;
-              } else {
-                if (log.isDebugEnabled()) {
-                  log.debug("{} scan pos {} return index {}/{}", mappedFile, lso, offset, size);
-                }
-              }
-              return lso + 12;
-            },
-            null);
-
+  public LocalSegment(SegmentMeta meta, BrokerContext brokerContext) {
     this.meta = meta.toBuilder();
-    this.topic = meta.getTopicId();
+    this.topicId = meta.getTopicId();
     this.partition = meta.getPartition();
     this.index = meta.getIndex();
     this.segmentId =
-        String.format("%s-%s-%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
-    this.journal = journal;
+        String.format("%s@%s@%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
 
     this.brokerContext = brokerContext;
     this.dataNodeCnx = brokerContext.getDataNodeCnx();
+    this.chunkManager = brokerContext.getChunkManager();
     this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
-    this.confirmOffset = this.startOffset + files.confirmOffset() / INDEX_UNIT_SIZE;
+
+    List<Chunk> chunks = chunkManager.getChunksByPrefix(segmentId);
+    if (chunks.size() == 0) {
+      lastChunk = chunkManager.newChunk(segmentId + "@" + startOffset);
+      chunks.add(lastChunk);
+    }
+    for (Chunk chunk : chunks) {
+      try {
+        String[] parts = chunk.name().split("@");
+        long startOffset = Long.valueOf(parts[3]);
+        this.chunks.put(startOffset, chunk);
+      } catch (Exception ex) {
+        log.error("find broken chunk {}", chunk);
+      }
+    }
+    lastChunk = this.chunks.lastEntry().getValue();
+
+    this.confirmOffset = startOffset + lastChunk.getConfirmOffset();
     this.nextOffset.set(confirmOffset);
 
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
@@ -146,12 +134,16 @@ public class LocalSegment implements Segment {
 
   @Override
   public void init() {
-    files.init();
+    for (Chunk chunk : chunks.values()) {
+      chunk.init();
+    }
   }
 
   @Override
   public void start() {
-    files.start();
+    for (Chunk chunk : chunks.values()) {
+      chunk.start();
+    }
   }
 
   @Override
@@ -166,7 +158,9 @@ public class LocalSegment implements Segment {
     for (Follower follower : followers) {
       follower.shutdown();
     }
-    files.shutdown();
+    for (Chunk chunk : chunks.values()) {
+      chunk.shutdown();
+    }
   }
 
   private void initReplicator() {
@@ -207,7 +201,7 @@ public class LocalSegment implements Segment {
               .setSegmentIndex(index)
               .build();
 
-      CompletableFuture<Journal.AppendResult> walFuture = journal.append(new BatchRecordJournalData(batchRecord));
+      CompletableFuture<Void> localWriteFuture = getLastChunk().append(batchRecord);
       waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(offset)));
 
       SegmentServiceProto.ReplicateRequest replicateRequest =
@@ -216,7 +210,7 @@ public class LocalSegment implements Segment {
         follower.replicate(replicateRequest);
       }
 
-      walFuture.thenAccept(
+      localWriteFuture.thenAccept(
           r -> {
             this.confirmOffset = offset + recordsCount;
             checkWaiting();
@@ -260,7 +254,8 @@ public class LocalSegment implements Segment {
     }
     long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
 
-    journal.append(new BatchRecordJournalData(batchRecord))
+    getLastChunk()
+        .append(batchRecord)
         .thenAccept(
             r -> {
               this.confirmOffset = replicaConfirmOffset;
@@ -280,31 +275,12 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
-    return files
-        .read((offset - this.startOffset) * 12, 12)
-        .thenCompose(
-            index -> {
-              long physicalOffset = index.getLong();
-              int size = index.getInt();
-              return journal.get(physicalOffset, size);
-            });
+    return getLastChunk().get(offset);
   }
 
   @Override
   public void putIndex(Index index) {
-    long expectNextOffset = this.startOffset + files.writeOffset() / INDEX_UNIT_SIZE;
-    if (expectNextOffset != index.getOffset()) {
-      log.warn("{} {} not match expect nextOffset {}", segmentId, index, expectNextOffset);
-      return;
-    }
-    if (log.isDebugEnabled()) {
-      log.debug("put {} {}", segmentId, index);
-    }
-    ByteBuffer buf = ByteBuffer.allocate(12);
-    buf.putLong(index.getPhysicalOffset());
-    buf.putInt(index.getSize());
-    buf.flip();
-    files.append(buf);
+    getLastChunk().putIndex(index);
   }
 
   @Override
@@ -323,7 +299,7 @@ public class LocalSegment implements Segment {
         .getSegmentServiceStub(request.getAddress())
         .sync(
             SegmentServiceProto.SyncRequest.newBuilder()
-                .setTopicId(topic)
+                .setTopicId(topicId)
                 .setPartition(partition)
                 .setIndex(index)
                 .setStartOffset(nextOffset.get())
@@ -344,7 +320,8 @@ public class LocalSegment implements Segment {
                 }
                 log.info("sync sink {}", batchRecord);
                 long confirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
-                journal.append(new BatchRecordJournalData(batchRecord))
+                getLastChunk()
+                    .append(batchRecord)
                     .thenAccept(r -> LocalSegment.this.confirmOffset = confirmOffset);
               }
 
@@ -395,19 +372,7 @@ public class LocalSegment implements Segment {
 
   @Override
   public void forceIndex() {
-    files.force();
-  }
-
-  @Override
-  public void truncateDirtyIndex(long physicalOffset) {
-    try {
-      for (long offset = files.confirmOffset(); offset > 0; offset = offset - 12) {
-        ByteBuffer index = files.read(offset - INDEX_UNIT_SIZE, 12).get();
-        long indexPhysicalOffset = index.getLong();
-      }
-    } catch (Exception e) {
-      throw new LinkyIOException(e);
-    }
+    lastChunk.forceIndex();
   }
 
   @Override
@@ -459,7 +424,7 @@ public class LocalSegment implements Segment {
             n ->
                 dataNodeCnx.seal(
                     SegmentManagerServiceProto.SealRequest.newBuilder()
-                        .setTopicId(topic)
+                        .setTopicId(topicId)
                         .setPartition(partition)
                         .setIndex(index)
                         .build()))
@@ -483,7 +448,7 @@ public class LocalSegment implements Segment {
               Utils.byte2file(
                   Utils.pb2jsonBytes(this.meta),
                   Utils.getSegmentMetaPath(
-                      this.brokerContext.getStorePath(), topic, partition, index));
+                      this.brokerContext.getStorePath(), topicId, partition, index));
               log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
             });
   }
@@ -510,6 +475,10 @@ public class LocalSegment implements Segment {
   @Override
   public String toString() {
     return meta.toString();
+  }
+
+  private Chunk getLastChunk() {
+    return lastChunk;
   }
 
   class Waiting<T> {
@@ -566,7 +535,7 @@ public class LocalSegment implements Segment {
             SegmentServiceProto.ReplicateRequest.newBuilder()
                 .setBatchRecord(
                     BatchRecord.newBuilder()
-                        .setTopicId(topic)
+                        .setTopicId(topicId)
                         .setPartition(partition)
                         .setSegmentIndex(index)
                         .setFirstOffset(NO_OFFSET)
@@ -691,5 +660,4 @@ public class LocalSegment implements Segment {
       }
     }
   }
-
 }

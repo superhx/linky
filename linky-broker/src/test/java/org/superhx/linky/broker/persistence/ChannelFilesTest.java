@@ -23,6 +23,6 @@ import java.nio.ByteBuffer;
 public class ChannelFilesTest extends IFilesTest {
   @Before
   public void setup() {
-    ifiles = new ChannelFiles(path, 1024, (m, s) -> 0L, (s) -> ByteBuffer.allocate(s));
+    ifiles = new ChannelFiles(path, "channelfilestest",1024, (m, s) -> 0L, (s) -> ByteBuffer.allocate(s));
   }
 }

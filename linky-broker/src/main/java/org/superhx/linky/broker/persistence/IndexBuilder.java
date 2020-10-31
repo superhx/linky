@@ -121,8 +121,7 @@ public class IndexBuilder implements Lifecycle {
         for (long offset = batchIndex.getOffset();
             offset < batchIndex.getOffset() + batchIndex.getCount();
             offset++) {
-          segment.putIndex(
-              new Segment.Index(offset, batchIndex.getPhysicalOffset(), batchIndex.getSize()));
+          segment.putIndex(new Index(offset, batchIndex.getPhysicalOffset(), batchIndex.getSize()));
         }
         walSlo = batchIndex.getPhysicalOffset() + batchIndex.getSize();
       } catch (InterruptedException e) {

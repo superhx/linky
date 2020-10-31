@@ -56,8 +56,6 @@ public interface Segment extends Lifecycle {
 
   void forceIndex();
 
-  default void truncateDirtyIndex(long physicalOffset) {}
-
   int getIndex();
 
   /**
@@ -123,41 +121,6 @@ public interface Segment extends Lifecycle {
 
     public Status getStatus() {
       return this.status;
-    }
-  }
-
-  class Index {
-    private long offset;
-    private long physicalOffset;
-    private int size;
-
-    public Index(long offset, long physicalOffset, int size) {
-      this.offset = offset;
-      this.physicalOffset = physicalOffset;
-      this.size = size;
-    }
-
-    public long getOffset() {
-      return offset;
-    }
-
-    public long getPhysicalOffset() {
-      return physicalOffset;
-    }
-
-    public int getSize() {
-      return size;
-    }
-
-    @Override
-    public String toString() {
-      return "Index{\"offset\":"
-          + offset
-          + ",\"physicalOffset\":"
-          + physicalOffset
-          + ",\"size\":"
-          + size
-          + "}";
     }
   }
 

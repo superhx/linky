@@ -1,0 +1,129 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.superhx.linky.broker.persistence;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.superhx.linky.service.proto.BatchRecord;
+
+import java.nio.ByteBuffer;
+import java.util.concurrent.CompletableFuture;
+
+public class LocalChunk implements Chunk {
+  private static final int INDEX_UNIT_SIZE = 12;
+  private static final int FILE_SIZE = 12 * 1024;
+  private static final Logger log = LoggerFactory.getLogger(LocalChunk.class);
+  private String storePath;
+  private String chunkId;
+  private Journal<BatchRecordJournalData> journal;
+  private IFiles indexer;
+
+  public LocalChunk(String path, String name, Journal<BatchRecordJournalData> journal) {
+    this.chunkId = name;
+    this.journal = journal;
+
+    this.storePath = String.format("%s/chunk.%s", path, name);
+    this.indexer =
+        new MappedFiles(
+            this.storePath,
+            "index",
+            FILE_SIZE,
+            (indexFile, lso) -> {
+              ByteBuffer index = indexFile.read(lso, INDEX_UNIT_SIZE);
+              long offset = index.getLong();
+              int size = index.getInt();
+              if (size == 0) {
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return noop", indexFile, lso);
+                }
+                return lso;
+              } else {
+                if (log.isDebugEnabled()) {
+                  log.debug("{} scan pos {} return index {}/{}", indexFile, lso, offset, size);
+                }
+              }
+              return lso + 12;
+            },
+            null);
+  }
+
+  @Override
+  public void init() {
+      indexer.init();
+  }
+
+  @Override
+  public void start() {
+      indexer.start();
+  }
+
+  @Override
+  public void shutdown() {
+      indexer.shutdown();
+  }
+
+  @Override
+  public String name() {
+    return chunkId;
+  }
+
+  @Override
+  public CompletableFuture<Void> append(BatchRecord batchRecord) {
+    return journal.append(new BatchRecordJournalData(batchRecord)).thenAccept(r -> {});
+  }
+
+  @Override
+  public CompletableFuture<BatchRecord> get(long offset) {
+    long relativeOffset = offset;
+    return indexer
+        .read(relativeOffset * 12, 12)
+        .thenCompose(
+            index -> {
+              long physicalOffset = index.getLong();
+              int size = index.getInt();
+              return journal.get(physicalOffset, size);
+            })
+        .thenApply(record -> record.getData().getBatchRecord());
+  }
+
+  @Override
+  public long getConfirmOffset() {
+    return indexer.confirmOffset() / INDEX_UNIT_SIZE;
+  }
+
+  @Override
+  public void putIndex(Index index) {
+    long expectNextOffset = indexer.writeOffset() / INDEX_UNIT_SIZE;
+    if (expectNextOffset != index.getOffset()) {
+      log.warn("{} {} not match expect nextOffset {}", chunkId, index, expectNextOffset);
+      return;
+    }
+    if (log.isDebugEnabled()) {
+      log.debug("put {} {}", chunkId, index);
+    }
+    ByteBuffer buf = ByteBuffer.allocate(12);
+    buf.putLong(index.getPhysicalOffset());
+    buf.putInt(index.getSize());
+    buf.flip();
+    indexer.append(buf);
+  }
+
+  @Override
+  public void forceIndex() {
+    indexer.force();
+  }
+}

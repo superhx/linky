@@ -41,7 +41,8 @@ public class MappedFile implements IFile {
     AbstractJournal.ensureDirOK(new File(file).getParent());
     this.file = file;
     this.fileSize = fileSize;
-    this.startOffset = Long.valueOf(new File(file).getName());
+    String fileName = new File(file).getName();
+    this.startOffset = Long.valueOf(fileName.substring(fileName.lastIndexOf(".")));
     try {
       randomAccessFile = new RandomAccessFile(file, "rw");
       randomAccessFile.setLength(fileSize);

@@ -72,8 +72,7 @@ public class LocalSegmentManager implements Lifecycle {
             log.info("load local segment {}", segmentMeta);
             segments.put(
                 new SegmentKey(topicId, partitionId, segmentIndex),
-                new LocalSegment(
-                    segmentMeta, persistenceFactory.newWriteAheadLog(), brokerContext));
+                new LocalSegment(segmentMeta, brokerContext));
           } catch (IOException e) {
             continue;
           }

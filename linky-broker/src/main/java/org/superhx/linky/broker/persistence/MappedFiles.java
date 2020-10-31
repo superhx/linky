@@ -23,10 +23,11 @@ import java.util.function.Function;
 public class MappedFiles extends AbstractFiles {
   public MappedFiles(
       String path,
+      String filePrefix,
       int fileSize,
       BiFunction<IFile, Long, Long> dataChecker,
       Function<Integer, ByteBuffer> blankFiller) {
-    super(path, fileSize, dataChecker, blankFiller);
+    super(path, filePrefix, fileSize, dataChecker, blankFiller);
   }
 
   @Override

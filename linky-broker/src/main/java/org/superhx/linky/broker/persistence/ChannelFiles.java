@@ -24,10 +24,11 @@ public class ChannelFiles extends AbstractFiles {
 
   public ChannelFiles(
       String path,
+      String filePrefix,
       int fileSize,
       BiFunction<IFile, Long, Long> dataChecker,
       Function<Integer, ByteBuffer> blankFiller) {
-    super(path, fileSize, dataChecker, blankFiller);
+    super(path, filePrefix, fileSize, dataChecker, blankFiller);
   }
 
   @Override
