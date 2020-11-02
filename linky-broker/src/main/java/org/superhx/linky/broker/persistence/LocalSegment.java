@@ -81,9 +81,9 @@ public class LocalSegment implements Segment {
     this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
 
-    List<Chunk> chunks = chunkManager.getChunksByPrefix(segmentId);
+    List<Chunk> chunks = chunkManager.getChunks(topicId, partition, index);
     if (chunks.size() == 0) {
-      lastChunk = chunkManager.newChunk(segmentId + "@" + startOffset);
+      lastChunk = chunkManager.newChunk(topicId, partition, index, startOffset);
       chunks.add(lastChunk);
     }
     for (Chunk chunk : chunks) {
@@ -279,11 +279,6 @@ public class LocalSegment implements Segment {
   }
 
   @Override
-  public void putIndex(Index index) {
-    getLastChunk().putIndex(index);
-  }
-
-  @Override
   public synchronized void syncCmd(
       SegmentServiceProto.SyncCmdRequest request,
       StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
@@ -368,11 +363,6 @@ public class LocalSegment implements Segment {
               responseObserver.onError(t);
               return null;
             });
-  }
-
-  @Override
-  public void forceIndex() {
-    lastChunk.forceIndex();
   }
 
   @Override

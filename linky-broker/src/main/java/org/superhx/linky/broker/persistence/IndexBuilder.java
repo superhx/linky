@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.Lifecycle;
@@ -27,11 +28,11 @@ import java.util.concurrent.*;
 import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
 
 public class IndexBuilder implements Lifecycle {
-  private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
+  private static final Logger log = LoggerFactory.getLogger(IndexBuilder.class);
   private String storePath;
   private Status status;
-  private LocalSegmentManager localSegmentManager;
-  private Journal<BatchRecordJournalData> journal;
+  private Journal journal;
+  private ChunkManager chunkManager;
   private long walSlo;
   private Checkpoint checkpoint;
   private BlockingQueue<BatchIndex> waitingPutIndexes = new LinkedBlockingQueue<>();
@@ -45,7 +46,7 @@ public class IndexBuilder implements Lifecycle {
 
   @Override
   public void init() {
-    String checkpointPath = storePath + "/checkpoint.json";
+    String checkpointPath = storePath + "/indexCheckpoint.json";
     checkpoint = Checkpoint.load(checkpointPath);
     walSlo = checkpoint.getWalLso();
     recover();
@@ -88,7 +89,12 @@ public class IndexBuilder implements Lifecycle {
         physicalOffset += record.getSize();
         continue;
       }
-      BatchRecord batchRecord = ((BatchRecordJournalData) record.getData()).getBatchRecord();
+      BatchRecord batchRecord = null;
+      try {
+        batchRecord = BatchRecord.parseFrom(record.getData().toByteArray());
+      } catch (InvalidProtocolBufferException e) {
+        e.printStackTrace();
+      }
       BatchIndex index =
           IndexBuilder.BatchIndex.newBuilder()
               .setTopicId(batchRecord.getTopicId())
@@ -97,6 +103,7 @@ public class IndexBuilder implements Lifecycle {
               .setCount(batchRecord.getRecordsCount())
               .setPhysicalOffset(record.getOffset())
               .setSize(record.getSize())
+              .setChunk(null) // TODO: chunk
               .build();
       putIndex(index);
       physicalOffset += record.getSize();
@@ -111,17 +118,12 @@ public class IndexBuilder implements Lifecycle {
     for (; ; ) {
       try {
         BatchIndex batchIndex = waitingPutIndexes.take();
-        Segment segment =
-            localSegmentManager.getSegment(
-                batchIndex.getTopicId(), batchIndex.getPartition(), batchIndex.getSegmentIndex());
-        if (segment == null) {
-          log.info("cannot find segment for index {}", batchIndex);
-          continue;
-        }
         for (long offset = batchIndex.getOffset();
             offset < batchIndex.getOffset() + batchIndex.getCount();
             offset++) {
-          segment.putIndex(new Index(offset, batchIndex.getPhysicalOffset(), batchIndex.getSize()));
+          batchIndex
+              .getChunk()
+              .putIndex(new Index(offset, batchIndex.getPhysicalOffset(), batchIndex.getSize()));
         }
         walSlo = batchIndex.getPhysicalOffset() + batchIndex.getSize();
       } catch (InterruptedException e) {
@@ -134,19 +136,19 @@ public class IndexBuilder implements Lifecycle {
 
   protected void doForeIndex() {
     long walSlo = this.walSlo;
-    localSegmentManager.forEach(
-        seg -> {
-          seg.forceIndex();
+    chunkManager.foreach(
+        c -> {
+          c.forceIndex();
         });
     checkpoint.setWalLso(walSlo);
   }
 
-  public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
-    this.localSegmentManager = localSegmentManager;
-  }
-
   public void setJournal(Journal journal) {
     this.journal = journal;
+  }
+
+  public void setChunkManager(ChunkManager chunkManager) {
+    this.chunkManager = chunkManager;
   }
 
   static class BatchIndex {
@@ -157,6 +159,7 @@ public class IndexBuilder implements Lifecycle {
     private long physicalOffset;
     private int size;
     private int count;
+    private Chunk chunk;
 
     public int getTopicId() {
       return topicId;
@@ -186,6 +189,10 @@ public class IndexBuilder implements Lifecycle {
       return count;
     }
 
+    public Chunk getChunk() {
+      return chunk;
+    }
+
     public static Builder newBuilder() {
       return new Builder();
     }
@@ -199,6 +206,7 @@ public class IndexBuilder implements Lifecycle {
     private int count;
     private long physicalOffset;
     private int size;
+    private Chunk chunk;
 
     public Builder setTopicId(int topicId) {
       this.topicId = topicId;
@@ -235,6 +243,11 @@ public class IndexBuilder implements Lifecycle {
       return this;
     }
 
+    public Builder setChunk(Chunk chunk) {
+      this.chunk = chunk;
+      return this;
+    }
+
     public BatchIndex build() {
       BatchIndex batchIndex = new BatchIndex();
       batchIndex.topicId = topicId;
@@ -244,6 +257,7 @@ public class IndexBuilder implements Lifecycle {
       batchIndex.count = count;
       batchIndex.physicalOffset = physicalOffset;
       batchIndex.size = size;
+      batchIndex.chunk = chunk;
       return batchIndex;
     }
   }

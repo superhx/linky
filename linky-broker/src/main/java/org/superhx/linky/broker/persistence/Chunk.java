@@ -29,11 +29,15 @@ public interface Chunk extends Lifecycle {
 
   CompletableFuture<BatchRecord> get(long offset);
 
+  long getStartOffset();
+
   long getConfirmOffset();
 
   void putIndex(Index index);
 
   void forceIndex();
+
+  void delete();
 
   class AppendResult {
     private long offset;

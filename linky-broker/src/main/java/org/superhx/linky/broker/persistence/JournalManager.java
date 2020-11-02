@@ -25,7 +25,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class JournalManager {
-  private Map<String, Journal<BatchRecordJournalData>> journals = new HashMap<>();
+  private Map<String, Journal> journals = new HashMap<>();
 
   public JournalManager(String path) {
     String dataDirPath = path + "/data";
@@ -41,13 +41,13 @@ public class JournalManager {
       }
       if (linky.getName().startsWith("linky")) {
         String journalPath = linky.getPath() + "/logs";
-        Journal<BatchRecordJournalData> journal = new JournalImpl(journalPath, new Configuration());
+        Journal journal = new JournalImpl(journalPath, new Configuration());
         journals.put(linky.getPath(), journal);
       }
     }
   }
 
-  public Journal<BatchRecordJournalData> getJournal(String path) {
+  public Journal getJournal(String path) {
     return journals.get(path);
   }
 }

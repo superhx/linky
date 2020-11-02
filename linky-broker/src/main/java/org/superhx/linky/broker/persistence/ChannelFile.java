@@ -37,7 +37,7 @@ public class ChannelFile implements IFile {
   private int fileSize;
 
   public ChannelFile(String file, int fileSize) {
-    AbstractJournal.ensureDirOK(new File(file).getParent());
+    JournalImpl.ensureDirOK(new File(file).getParent());
     this.file = file;
     this.fileSize = fileSize;
     String fileName = new File(file).getName();

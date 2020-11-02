@@ -34,8 +34,6 @@ public interface Segment extends Lifecycle {
 
   CompletableFuture<BatchRecord> get(long offset);
 
-  void putIndex(Index index);
-
   default void replicate(
       SegmentServiceProto.ReplicateRequest request,
       StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
@@ -53,8 +51,6 @@ public interface Segment extends Lifecycle {
       StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
     throw new UnsupportedOperationException();
   }
-
-  void forceIndex();
 
   int getIndex();
 

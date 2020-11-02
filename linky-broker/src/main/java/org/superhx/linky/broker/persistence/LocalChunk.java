@@ -16,8 +16,10 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.service.proto.BatchRecord;
 
 import java.nio.ByteBuffer;
@@ -28,16 +30,18 @@ public class LocalChunk implements Chunk {
   private static final int FILE_SIZE = 12 * 1024;
   private static final Logger log = LoggerFactory.getLogger(LocalChunk.class);
   private String storePath;
-  private String chunkId;
-  private Journal<BatchRecordJournalData> journal;
-  private IFiles indexer;
+  private String name;
+  private long startOffset;
+  private Journal journal;
+  private IndexBuilder indexBuilder;
+  private IFiles indexes;
 
-  public LocalChunk(String path, String name, Journal<BatchRecordJournalData> journal) {
-    this.chunkId = name;
-    this.journal = journal;
+  public LocalChunk(String path, int topicId, int partition, int segmentIndex, long startOffset) {
+    this.name = topicId + "@" + partition + "@" + segmentIndex + "@" + startOffset;
+    this.startOffset = startOffset;
 
     this.storePath = String.format("%s/chunk.%s", path, name);
-    this.indexer =
+    this.indexes =
         new MappedFiles(
             this.storePath,
             "index",
@@ -63,33 +67,50 @@ public class LocalChunk implements Chunk {
 
   @Override
   public void init() {
-      indexer.init();
+    indexes.init();
   }
 
   @Override
   public void start() {
-      indexer.start();
+    indexes.start();
   }
 
   @Override
   public void shutdown() {
-      indexer.shutdown();
+    indexes.shutdown();
   }
 
   @Override
   public String name() {
-    return chunkId;
+    return name;
   }
 
   @Override
   public CompletableFuture<Void> append(BatchRecord batchRecord) {
-    return journal.append(new BatchRecordJournalData(batchRecord)).thenAccept(r -> {});
+    Journal.BytesData bytesData = new Journal.BytesData(batchRecord.toByteArray());
+    CompletableFuture<Void> cf = new CompletableFuture<>();
+    IndexBuilder.Builder index =
+        IndexBuilder.BatchIndex.newBuilder()
+            .setTopicId(batchRecord.getTopicId())
+            .setPartition(batchRecord.getPartition())
+            .setSegmentIndex(batchRecord.getSegmentIndex())
+            .setOffset(batchRecord.getFirstOffset())
+            .setCount(batchRecord.getRecordsCount())
+            .setChunk(this);
+    journal.append(
+        bytesData,
+        r -> {
+          indexBuilder.putIndex(
+              index.setPhysicalOffset(r.getOffset()).setSize(r.getSize()).build());
+          cf.complete(null);
+        });
+    return cf;
   }
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
-    long relativeOffset = offset;
-    return indexer
+    long relativeOffset = offset - startOffset;
+    return indexes
         .read(relativeOffset * 12, 12)
         .thenCompose(
             index -> {
@@ -97,33 +118,58 @@ public class LocalChunk implements Chunk {
               int size = index.getInt();
               return journal.get(physicalOffset, size);
             })
-        .thenApply(record -> record.getData().getBatchRecord());
+        .thenApply(
+            record -> {
+              try {
+                return BatchRecord.parseFrom(record.getData().toByteArray());
+              } catch (InvalidProtocolBufferException e) {
+                throw new LinkyIOException(e);
+              }
+            });
+  }
+
+  @Override
+  public long getStartOffset() {
+    return startOffset;
   }
 
   @Override
   public long getConfirmOffset() {
-    return indexer.confirmOffset() / INDEX_UNIT_SIZE;
+    return startOffset + indexes.confirmOffset() / INDEX_UNIT_SIZE;
   }
 
   @Override
   public void putIndex(Index index) {
-    long expectNextOffset = indexer.writeOffset() / INDEX_UNIT_SIZE;
+    long expectNextOffset = startOffset + indexes.writeOffset() / INDEX_UNIT_SIZE;
     if (expectNextOffset != index.getOffset()) {
-      log.warn("{} {} not match expect nextOffset {}", chunkId, index, expectNextOffset);
+      log.warn("{} {} not match expect nextOffset {}", name, index, expectNextOffset);
       return;
     }
     if (log.isDebugEnabled()) {
-      log.debug("put {} {}", chunkId, index);
+      log.debug("put {} {}", name, index);
     }
     ByteBuffer buf = ByteBuffer.allocate(12);
     buf.putLong(index.getPhysicalOffset());
     buf.putInt(index.getSize());
     buf.flip();
-    indexer.append(buf);
+    indexes.append(buf);
   }
 
   @Override
   public void forceIndex() {
-    indexer.force();
+    indexes.force();
+  }
+
+  @Override
+  public void delete() {
+    indexes.delete();
+  }
+
+  public void setJournal(Journal journal) {
+    this.journal = journal;
+  }
+
+  public void setIndexBuilder(IndexBuilder indexBuilder) {
+    this.indexBuilder = indexBuilder;
   }
 }

@@ -38,11 +38,11 @@ public class MappedFile implements IFile {
   private MappedByteBuffer mappedByteBuffer;
 
   public MappedFile(String file, int fileSize) {
-    AbstractJournal.ensureDirOK(new File(file).getParent());
+    JournalImpl.ensureDirOK(new File(file).getParent());
     this.file = file;
     this.fileSize = fileSize;
     String fileName = new File(file).getName();
-    this.startOffset = Long.valueOf(fileName.substring(fileName.lastIndexOf(".")));
+    this.startOffset = Long.valueOf(fileName.substring(fileName.lastIndexOf(".") + 1));
     try {
       randomAccessFile = new RandomAccessFile(file, "rw");
       randomAccessFile.setLength(fileSize);
@@ -69,8 +69,11 @@ public class MappedFile implements IFile {
 
   @Override
   public synchronized void write(ByteBuffer byteBuffer, long offset) {
+    ByteBuffer mappedByteBuffer = this.mappedByteBuffer.slice();
+    int size = byteBuffer.limit();
     mappedByteBuffer.position((int) (offset - startOffset));
     mappedByteBuffer.put(byteBuffer);
+    this.writeOffset += size;
   }
 
   @Override
@@ -82,10 +85,10 @@ public class MappedFile implements IFile {
 
   @Override
   public ByteBuffer read(long position, int size) {
-    ByteBuffer buf = mappedByteBuffer.slice();
-    buf.position((int) (position - startOffset));
-    buf.limit((int) (position - startOffset + size));
-    return buf;
+    ByteBuffer mappedByteBuffer = this.mappedByteBuffer.slice();
+    mappedByteBuffer.position((int) (position - startOffset));
+    mappedByteBuffer.limit((int) (position - startOffset + size));
+    return mappedByteBuffer;
   }
 
   @Override

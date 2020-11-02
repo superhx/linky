@@ -71,16 +71,6 @@ public class RemoteSegment implements Segment {
     return result;
   }
 
-  @Override
-  public void putIndex(Index index) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public void forceIndex() {
-    throw new UnsupportedOperationException();
-  }
-
   public CompletableFuture<BatchRecord> get0(long offset) {
     CompletableFuture<BatchRecord> result = new CompletableFuture<>();
     String aliveNode = getAliveNode();

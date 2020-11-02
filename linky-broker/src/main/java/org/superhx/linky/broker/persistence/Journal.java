@@ -3,14 +3,15 @@ package org.superhx.linky.broker.persistence;
 import org.superhx.linky.broker.Lifecycle;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
-public interface Journal<T extends Journal.RecordData> extends Lifecycle {
+public interface Journal extends Lifecycle {
 
-  CompletableFuture<AppendResult> append(T batchRecord);
+  void append(BytesData bytesData, Consumer<AppendResult> callback);
 
-  CompletableFuture<Record<T>> get(long offset, int size);
+  CompletableFuture<Record> get(long offset, int size);
 
-  CompletableFuture<Record<T>> get(long offset);
+  CompletableFuture<Record> get(long offset);
 
   long getStartOffset();
 
@@ -46,13 +47,13 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
     }
   }
 
-  class Record<T extends RecordData> {
+  class Record {
     private long offset;
     private int size;
     private boolean blank;
-    private T data;
+    private BytesData data;
 
-    public T getData() {
+    public BytesData getData() {
       return data;
     }
 
@@ -68,39 +69,39 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
       return blank;
     }
 
-    public static <T extends RecordData> Builder<T> newBuilder() {
-      return new Builder<>();
+    public static Builder newBuilder() {
+      return new Builder();
     }
   }
 
-  class Builder<T extends RecordData> {
+  class Builder {
     private long offset;
     private int size;
     private boolean blank;
-    private T data;
+    private BytesData data;
 
-    public Builder<T> setOffset(long offset) {
+    public Builder setOffset(long offset) {
       this.offset = offset;
       return this;
     }
 
-    public Builder<T> setSize(int size) {
+    public Builder setSize(int size) {
       this.size = size;
       return this;
     }
 
-    public Builder<T> setBlank(boolean blank) {
+    public Builder setBlank(boolean blank) {
       this.blank = blank;
       return this;
     }
 
-    public Builder<T> setData(T data) {
+    public Builder setData(BytesData data) {
       this.data = data;
       return this;
     }
 
-    public Record<T> build() {
-      Record<T> record = new Record();
+    public Record build() {
+      Record record = new Record();
       record.offset = offset;
       record.size = size;
       record.blank = blank;
@@ -109,7 +110,15 @@ public interface Journal<T extends Journal.RecordData> extends Lifecycle {
     }
   }
 
-  interface RecordData {
-    byte[] toByteArray();
+  class BytesData {
+    private byte[] bytes;
+
+    public BytesData(byte[] bytes) {
+      this.bytes = bytes;
+    }
+
+    public byte[] toByteArray() {
+      return bytes;
+    }
   }
 }
