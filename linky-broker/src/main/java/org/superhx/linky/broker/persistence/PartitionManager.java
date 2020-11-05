@@ -41,7 +41,7 @@ public class PartitionManager implements Lifecycle {
   /** topic partition id to semaphore map */
   private Map<Long, Semaphore> partitionLocks = new ConcurrentHashMap<>();
 
-  private PersistenceFactory persistenceFactory;
+  private LocalSegmentManager localSegmentManager;
 
   public CompletableFuture<OpenResponse> open(OpenRequest request) {
     PartitionMeta meta = request.getMeta();
@@ -56,7 +56,8 @@ public class PartitionManager implements Lifecycle {
 
     Partition partition = partitions.get(topicPartition);
     if (partition == null) {
-      partition = persistenceFactory.newPartition(meta);
+      partition = new LocalPartitionImpl(meta);
+      ((LocalPartitionImpl) partition).setLocalSegmentManager(localSegmentManager);
       partitions.put(topicPartition, partition);
       if (!topicMetas.containsKey(meta.getTopic())) {
         topicMetas.put(meta.getTopic(), TopicMeta.newBuilder().setId(meta.getTopicId()).build());
@@ -131,7 +132,7 @@ public class PartitionManager implements Lifecycle {
     return partitionLocks.get(topicPartition);
   }
 
-  public void setPersistenceFactory(PersistenceFactory persistenceFactory) {
-    this.persistenceFactory = persistenceFactory;
+  public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
+    this.localSegmentManager = localSegmentManager;
   }
 }

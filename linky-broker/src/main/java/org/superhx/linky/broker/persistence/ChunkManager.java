@@ -24,11 +24,13 @@ import org.superhx.linky.broker.loadbalance.SegmentKey;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class ChunkManager implements Lifecycle {
   private String path;
-  private LinkyData linkyData;
+  private List<LinkyData> linkyDatas = new ArrayList<>();
+  private AtomicInteger roundRobin = new AtomicInteger();
   private Map<SegmentKey, List<Chunk>> segmentChunksMap = new ConcurrentHashMap<>();
   private JournalManager journalManager;
   private IndexBuilderManager indexBuilderManager;
@@ -54,7 +56,8 @@ public class ChunkManager implements Lifecycle {
       if (linky.getName().startsWith("linky")) {
         Journal journal = journalManager.getJournal(linky.getPath());
         IndexBuilder indexBuilder = indexBuilderManager.getIndexBuilder(linky.getPath());
-        this.linkyData = new LinkyData(linky.getPath(), journal, indexBuilder);
+        LinkyData linkyData = new LinkyData(linky.getPath(), journal, indexBuilder);
+        linkyDatas.add(linkyData);
         String chunksDirPath = linky.getPath() + "/chunks";
         Utils.ensureDirOK(chunksDirPath);
         File chunksDir = new File(chunksDirPath);
@@ -66,14 +69,15 @@ public class ChunkManager implements Lifecycle {
           if (chunkDir.isFile() || !chunkDir.getName().startsWith("chunk.")) {
             continue;
           }
-          String[] parts = chunkDir.getName().split("@");
+          String info = chunkDir.getName().substring(chunkDir.getName().indexOf(".") + 1);
+          String[] parts = info.split("@");
           int topicId = Integer.valueOf(parts[0]);
           int partition = Integer.valueOf(parts[1]);
           int segmentIndex = Integer.valueOf(parts[2]);
           long startOffset = Integer.valueOf(parts[3]);
 
           Chunk chunk =
-              new LocalChunk(chunkDir.getPath(), topicId, partition, segmentIndex, startOffset);
+              new LocalChunk(chunksDirPath, topicId, partition, segmentIndex, startOffset);
           ((LocalChunk) chunk).setJournal(journal);
           ((LocalChunk) chunk).setIndexBuilder(indexBuilder);
           chunk.init();
@@ -87,6 +91,9 @@ public class ChunkManager implements Lifecycle {
         }
       }
     }
+    segmentChunksMap
+        .values()
+        .forEach(l -> Collections.sort(l, Comparator.comparingLong(Chunk::getStartOffset)));
   }
 
   @Override
@@ -100,13 +107,16 @@ public class ChunkManager implements Lifecycle {
     segmentChunksMap.clear();
   }
 
-  public List<Chunk> getChunks(int topicId, int partition, int segmentIndex) {
+  public synchronized List<Chunk> getChunks(int topicId, int partition, int segmentIndex) {
     return Optional.ofNullable(
             segmentChunksMap.get(new SegmentKey(topicId, partition, segmentIndex)))
         .orElse(Collections.emptyList());
   }
 
-  public Chunk newChunk(int topicId, int partition, int segmentIndex, long startOffset) {
+  public synchronized Chunk newChunk(
+      int topicId, int partition, int segmentIndex, long startOffset) {
+    LinkyData linkyData =
+        linkyDatas.get(Math.abs(roundRobin.incrementAndGet() % linkyDatas.size()));
     Chunk chunk =
         new LocalChunk(
             linkyData.getPath() + "/chunks", topicId, partition, segmentIndex, startOffset);
@@ -114,6 +124,14 @@ public class ChunkManager implements Lifecycle {
     ((LocalChunk) chunk).setIndexBuilder(linkyData.getIndexBuilder());
     chunk.init();
     chunk.start();
+
+    SegmentKey segmentKey = new SegmentKey(topicId, partition, segmentIndex);
+    List<Chunk> chunks = segmentChunksMap.get(segmentKey);
+    if (chunks == null) {
+      chunks = new ArrayList<>(1);
+      segmentChunksMap.put(segmentKey, chunks);
+    }
+    chunks.add(chunk);
     return chunk;
   }
 

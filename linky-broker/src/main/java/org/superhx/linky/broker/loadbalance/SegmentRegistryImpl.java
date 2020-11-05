@@ -391,6 +391,12 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
               }
               meta.setEndOffset(endOffset);
               meta.setFlag(meta.getFlag() | Segment.SEAL_MARK);
+              log.info(
+                  "[SEAL] {}-{}-{} with endOffset {}",
+                  request.getTopicId(),
+                  request.getPartition(),
+                  request.getIndex(),
+                  endOffset);
               kvStore.put(
                   String.format(
                       "segments/%s/%s/%s",

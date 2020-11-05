@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import org.superhx.linky.broker.Configuration;
+import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 
@@ -24,7 +25,7 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
-public class JournalManager {
+public class JournalManager implements Lifecycle {
   private Map<String, Journal> journals = new HashMap<>();
 
   public JournalManager(String path) {
@@ -45,6 +46,21 @@ public class JournalManager {
         journals.put(linky.getPath(), journal);
       }
     }
+  }
+
+  @Override
+  public void init() {
+    journals.values().forEach(j -> j.init());
+  }
+
+  @Override
+  public void start() {
+    journals.values().forEach(j -> j.start());
+  }
+
+  @Override
+  public void shutdown() {
+    journals.values().forEach(j -> j.shutdown());
   }
 
   public Journal getJournal(String path) {

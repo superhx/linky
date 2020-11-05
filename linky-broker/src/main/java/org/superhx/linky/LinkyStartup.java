@@ -25,9 +25,7 @@ import org.superhx.linky.broker.KeepAlive;
 import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyException;
 import org.superhx.linky.broker.loadbalance.*;
-import org.superhx.linky.broker.persistence.LocalSegmentManager;
-import org.superhx.linky.broker.persistence.PartitionManager;
-import org.superhx.linky.broker.persistence.PersistenceFactoryImpl;
+import org.superhx.linky.broker.persistence.*;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.broker.service.PartitionService;
 import org.superhx.linky.broker.service.RecordService;
@@ -38,13 +36,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class LinkyBrokerStartup implements Lifecycle {
-  private static final Logger log = LoggerFactory.getLogger(LinkyBrokerStartup.class);
+public class LinkyStartup implements Lifecycle {
+  private static final Logger log = LoggerFactory.getLogger(LinkyStartup.class);
   private List<Lifecycle> components = new ArrayList<>();
   private Server server;
   private BrokerContext brokerContext;
 
-  public LinkyBrokerStartup() {
+  public LinkyStartup() {
     String port = System.getProperty("port", "9594");
     brokerContext = new BrokerContext();
     brokerContext.setAddress("127.0.0.1:" + port);
@@ -53,17 +51,58 @@ public class LinkyBrokerStartup implements Lifecycle {
 
     log.info("broker {} startup", port);
 
+    // persistent component start
+    JournalManager journalManager = new JournalManager(brokerContext.getStorePath());
+    components.add(journalManager);
+    ChunkManager chunkManager = new ChunkManager(brokerContext.getStorePath());
+    components.add(chunkManager);
+    IndexBuilderManager indexBuilderManager = new IndexBuilderManager(brokerContext.getStorePath());
+    components.add(indexBuilderManager);
+
+    chunkManager.setJournalManager(journalManager);
+    chunkManager.setIndexBuilderManager(indexBuilderManager);
+
+    indexBuilderManager.setJournalManager(journalManager);
+    indexBuilderManager.setChunkManager(chunkManager);
+    // persistent component end
+
+    // election component start
     LinkyElection election = new LinkyElection(brokerContext);
     components.add(election);
+    // election component end
 
+    // data node component start
     DataNodeCnx dataNodeCnx = new DataNodeCnx();
-    PersistenceFactoryImpl persistenceFactory = new PersistenceFactoryImpl();
-    components.add(persistenceFactory);
     LocalSegmentManager localSegmentManager = new LocalSegmentManager();
     components.add(localSegmentManager);
     PartitionManager partitionManager = new PartitionManager();
     components.add(partitionManager);
+    KeepAlive keepAlive = new KeepAlive();
+    components.add(keepAlive);
 
+    localSegmentManager.setDataNodeCnx(dataNodeCnx);
+    localSegmentManager.setBrokerContext(brokerContext);
+    localSegmentManager.setChunkManager(chunkManager);
+
+    partitionManager.setLocalSegmentManager(localSegmentManager);
+
+    keepAlive.setLocalSegmentManager(localSegmentManager);
+    keepAlive.setDataNodeCnx(dataNodeCnx);
+    keepAlive.setBrokerContext(brokerContext);
+    // data node component end
+
+    // data node service start
+    RecordService recordService = new RecordService();
+    PartitionService partitionService = new PartitionService();
+    SegmentService segmentService = new SegmentService();
+
+    recordService.setPartitionManager(partitionManager);
+    partitionService.setPartitionManager(partitionManager);
+    partitionService.setBrokerContext(brokerContext);
+    segmentService.setLocalSegmentManager(localSegmentManager);
+    // data node service end
+
+    // controller component start
     KVStore kvStore = new KVStore();
     components.add(kvStore);
     ControlNodeCnx controlNodeCnx = new ControlNodeCnx();
@@ -75,27 +114,10 @@ public class LinkyBrokerStartup implements Lifecycle {
     NodeRegistryImpl nodeRegistry = new NodeRegistryImpl();
     components.add(nodeRegistry);
 
-    KeepAlive keepAlive = new KeepAlive();
-    components.add(keepAlive);
-
-    RecordService recordService = new RecordService();
-    PartitionService partitionService = new PartitionService();
-    SegmentService segmentService = new SegmentService();
     ControllerService controllerService = new ControllerService();
-
-    brokerContext.setDataNodeCnx(dataNodeCnx);
 
     dataNodeCnx.setElection(election);
     dataNodeCnx.setBrokerContext(brokerContext);
-
-    persistenceFactory.setBrokerContext(brokerContext);
-    persistenceFactory.setLocalSegmentManager(localSegmentManager);
-
-    localSegmentManager.setBrokerContext(brokerContext);
-    localSegmentManager.setDataNodeCnx(dataNodeCnx);
-    localSegmentManager.setPersistenceFactory(persistenceFactory);
-
-    partitionManager.setPersistenceFactory(persistenceFactory);
 
     partitionRegistry.setNodeRegistry(nodeRegistry);
     partitionRegistry.setBrokerContext(brokerContext);
@@ -110,19 +132,8 @@ public class LinkyBrokerStartup implements Lifecycle {
     segmentRegistry.setControlNodeCnx(controlNodeCnx);
     segmentRegistry.setNodeRegistry(nodeRegistry);
 
-    recordService.setPartitionManager(partitionManager);
-
-    partitionService.setBrokerContext(brokerContext);
-    partitionService.setPartitionManager(partitionManager);
-
-    segmentService.setLocalSegmentManager(localSegmentManager);
-
     controllerService.setSegmentRegistry(segmentRegistry);
     controllerService.setNodeRegistry(nodeRegistry);
-
-    keepAlive.setBrokerContext(brokerContext);
-    keepAlive.setDataNodeCnx(dataNodeCnx);
-    keepAlive.setLocalSegmentManager(localSegmentManager);
 
     election.registerListener(segmentRegistry);
     election.registerListener(partitionRegistry);
@@ -177,7 +188,7 @@ public class LinkyBrokerStartup implements Lifecycle {
   }
 
   public static void main(String... args) {
-    LinkyBrokerStartup broker = new LinkyBrokerStartup();
+    LinkyStartup broker = new LinkyStartup();
     broker.init();
     broker.start();
 

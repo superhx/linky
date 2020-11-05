@@ -67,7 +67,11 @@ public class LocalSegment implements Segment {
   private static final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor();
 
-  public LocalSegment(SegmentMeta meta, BrokerContext brokerContext) {
+  public LocalSegment(
+      SegmentMeta meta,
+      BrokerContext brokerContext,
+      DataNodeCnx dataNodeCnx,
+      ChunkManager chunkManager) {
     this.meta = meta.toBuilder();
     this.topicId = meta.getTopicId();
     this.partition = meta.getPartition();
@@ -76,15 +80,15 @@ public class LocalSegment implements Segment {
         String.format("%s@%s@%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
 
     this.brokerContext = brokerContext;
-    this.dataNodeCnx = brokerContext.getDataNodeCnx();
-    this.chunkManager = brokerContext.getChunkManager();
+    this.dataNodeCnx = dataNodeCnx;
+    this.chunkManager = chunkManager;
     this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
 
     List<Chunk> chunks = chunkManager.getChunks(topicId, partition, index);
     if (chunks.size() == 0) {
       lastChunk = chunkManager.newChunk(topicId, partition, index, startOffset);
-      chunks.add(lastChunk);
+      this.chunks.put(startOffset, lastChunk);
     }
     for (Chunk chunk : chunks) {
       try {
@@ -97,7 +101,7 @@ public class LocalSegment implements Segment {
     }
     lastChunk = this.chunks.lastEntry().getValue();
 
-    this.confirmOffset = startOffset + lastChunk.getConfirmOffset();
+    this.confirmOffset = lastChunk.getConfirmOffset();
     this.nextOffset.set(confirmOffset);
 
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
@@ -313,7 +317,9 @@ public class LocalSegment implements Segment {
                               nextOffset.get(), batchRecord)));
                   return;
                 }
-                log.info("sync sink {}", batchRecord);
+                if (log.isDebugEnabled()) {
+                  log.info("sync sink {}", batchRecord);
+                }
                 long confirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
                 getLastChunk()
                     .append(batchRecord)

@@ -33,16 +33,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class LocalSegmentManager implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private Map<SegmentKey, Segment> segments = new ConcurrentHashMap<>();
-
-  private PersistenceFactory persistenceFactory;
   private DataNodeCnx dataNodeCnx;
   private BrokerContext brokerContext;
+  private ChunkManager chunkManager;
 
   @Override
   public void init() {
@@ -72,7 +70,7 @@ public class LocalSegmentManager implements Lifecycle {
             log.info("load local segment {}", segmentMeta);
             segments.put(
                 new SegmentKey(topicId, partitionId, segmentIndex),
-                new LocalSegment(segmentMeta, brokerContext));
+                new LocalSegment(segmentMeta, brokerContext, dataNodeCnx, chunkManager));
           } catch (IOException e) {
             continue;
           }
@@ -112,7 +110,9 @@ public class LocalSegmentManager implements Lifecycle {
             meta.getTopicId(),
             meta.getPartition(),
             meta.getIndex()));
-    segment = persistenceFactory.newSegment(meta);
+    segment = new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager);
+    segment.init();
+    segment.start();
     segments.put(key, segment);
     log.info("create local segment {}", meta);
     return CompletableFuture.completedFuture(null);
@@ -128,7 +128,7 @@ public class LocalSegmentManager implements Lifecycle {
                 SegmentKey key =
                     new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
                 Segment segment = segments.get(key);
-                segment = new RemoteSegment(meta, segment, brokerContext);
+                segment = new RemoteSegment(meta, segment, dataNodeCnx);
                 segmentList.add(segment);
               }
               return CompletableFuture.completedFuture(segmentList);
@@ -159,21 +159,15 @@ public class LocalSegmentManager implements Lifecycle {
     return segments.values().stream().map(s -> s.getMeta()).collect(Collectors.toList());
   }
 
-  public void forEach(Consumer<Segment> action) {
-    for (Segment segment : segments.values()) {
-      action.accept(segment);
-    }
-  }
-
-  public void setPersistenceFactory(PersistenceFactory persistenceFactory) {
-    this.persistenceFactory = persistenceFactory;
-  }
-
   public void setDataNodeCnx(DataNodeCnx dataNodeCnx) {
     this.dataNodeCnx = dataNodeCnx;
   }
 
   public void setBrokerContext(BrokerContext brokerContext) {
     this.brokerContext = brokerContext;
+  }
+
+  public void setChunkManager(ChunkManager chunkManager) {
+    this.chunkManager = chunkManager;
   }
 }

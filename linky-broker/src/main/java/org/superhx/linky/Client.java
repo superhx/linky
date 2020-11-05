@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Client {
-  static int count = 2 * 1024;
+  static int count = 1;
   //    static int count = 1;
   //    static int count = 0;
 
@@ -41,9 +41,9 @@ public class Client {
     CountDownLatch latch = new CountDownLatch(count);
     for (int i = 0; i < count; i++) {
       String body = "";
-      for (int j = 0; j < 1024; j++) {
-        body += "hello";
-      }
+      //      for (int j = 0; j < 1024; j++) {
+      //        body += "hello";
+      //      }
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
@@ -96,7 +96,7 @@ public class Client {
                   "Get return offset:"
                       + getResponse.getBatchRecord().getFirstOffset()
                       + " count:"
-                      + getResponse.getBatchRecord().getRecordsCount());
+                      + getResponse.getBatchRecord().getRecordsCount() + " record:" + getResponse.getBatchRecord());
             }
 
             @Override

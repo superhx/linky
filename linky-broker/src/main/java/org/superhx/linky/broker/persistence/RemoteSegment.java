@@ -19,7 +19,6 @@ package org.superhx.linky.broker.persistence;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
@@ -36,9 +35,9 @@ public class RemoteSegment implements Segment {
   private String address;
   private Segment localSegment;
 
-  public RemoteSegment(SegmentMeta meta, Segment localSegment, BrokerContext brokerContext) {
+  public RemoteSegment(SegmentMeta meta, Segment localSegment, DataNodeCnx dataNodeCnx) {
     this.meta = meta.toBuilder();
-    this.dataNodeCnx = brokerContext.getDataNodeCnx();
+    this.dataNodeCnx = dataNodeCnx;
     this.address = meta.getReplicas(0).getAddress();
     this.localSegment = localSegment;
     log.info("open remote segment {}", meta);

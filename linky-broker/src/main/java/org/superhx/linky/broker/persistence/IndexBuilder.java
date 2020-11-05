@@ -23,6 +23,7 @@ import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
 
+import java.util.List;
 import java.util.concurrent.*;
 
 import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
@@ -95,18 +96,33 @@ public class IndexBuilder implements Lifecycle {
       } catch (InvalidProtocolBufferException e) {
         e.printStackTrace();
       }
-      BatchIndex index =
+
+      Builder indexBuilder =
           IndexBuilder.BatchIndex.newBuilder()
               .setTopicId(batchRecord.getTopicId())
               .setPartition(batchRecord.getPartition())
               .setSegmentIndex(batchRecord.getSegmentIndex())
               .setCount(batchRecord.getRecordsCount())
               .setPhysicalOffset(record.getOffset())
-              .setSize(record.getSize())
-              .setChunk(null) // TODO: chunk
-              .build();
-      putIndex(index);
+              .setSize(record.getSize());
+      List<Chunk> chunks =
+          chunkManager.getChunks(
+              batchRecord.getTopicId(), batchRecord.getPartition(), batchRecord.getSegmentIndex());
+      for (int i = chunks.size() - 1; i >= 0; i--) {
+        Chunk chunk = chunks.get(i);
+        if (chunk.getStartOffset() <= batchRecord.getFirstOffset()) {
+          indexBuilder.setChunk(chunk);
+          break;
+        }
+      }
+      BatchIndex batchIndex = indexBuilder.build();
+
       physicalOffset += record.getSize();
+      if (batchIndex.getChunk() == null) {
+        log.error("cannot find chunk for {}", batchIndex);
+        continue;
+      }
+      putIndex(batchIndex);
     }
   }
 
