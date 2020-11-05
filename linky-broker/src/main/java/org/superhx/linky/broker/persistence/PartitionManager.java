@@ -110,6 +110,9 @@ public class PartitionManager implements Lifecycle {
 
   public Partition getPartition(String topic, int partition) {
     TopicMeta meta = topicMetas.get(topic);
+    if (meta == null) {
+      return null;
+    }
     return getPartition(meta.getId(), partition);
   }
 

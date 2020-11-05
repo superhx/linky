@@ -17,11 +17,14 @@
 package org.superhx.linky.broker.loadbalance;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.Utils;
+import org.superhx.linky.controller.service.proto.PartitionManagerServiceGrpc;
+import org.superhx.linky.controller.service.proto.PartitionManagerServiceProto;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
 import org.superhx.linky.service.proto.PartitionServiceProto;
@@ -33,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 public class PartitionRegistryImpl
+    extends PartitionManagerServiceGrpc.PartitionManagerServiceImplBase
     implements PartitionRegistry, Lifecycle, LinkyElection.LeaderChangeListener {
   private static final Logger log = LoggerFactory.getLogger(PartitionRegistryImpl.class);
   private AtomicInteger topicIdCounter = new AtomicInteger();
@@ -46,6 +50,8 @@ public class PartitionRegistryImpl
   private LinkyElection election;
   private KVStore kvStore;
   private BrokerContext brokerContext;
+  private List<StreamObserver<PartitionManagerServiceProto.WatchResponse>> partitionWatchers =
+      new CopyOnWriteArrayList<>();
 
   @Override
   public void start() {
@@ -243,7 +249,10 @@ public class PartitionRegistryImpl
         return;
       }
       fastAllocate();
-      closeOpen();
+      boolean changed = closeOpen();
+      if (changed) {
+        notifyWatcher();
+      }
     }
 
     protected void fastAllocate() {
@@ -303,7 +312,8 @@ public class PartitionRegistryImpl
       return meta;
     }
 
-    protected void closeOpen() {
+    protected boolean closeOpen() {
+      boolean changed = false;
       List<CompletableFuture<?>> futures = new LinkedList<>();
       for (Integer topic : newTopicPartitionMap.keySet()) {
         List<PartitionMeta> newPartitionMetas = newTopicPartitionMap.get(topic);
@@ -339,6 +349,7 @@ public class PartitionRegistryImpl
         if (open.size() == 0 && close.size() == 0) {
           continue;
         }
+        changed = true;
         for (int i = 0; i < open.size(); i++) {
           PartitionMeta closeMeta = close.get(i);
           PartitionMeta openMeta = open.get(i);
@@ -370,6 +381,52 @@ public class PartitionRegistryImpl
         }
       }
       CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+      return changed;
     }
+  }
+
+  private void notifyWatcher() {
+    for (StreamObserver<PartitionManagerServiceProto.WatchResponse> watcher : partitionWatchers) {
+      List<PartitionMeta> partitions =
+          topicPartitionMap.values().stream()
+              .flatMap(v -> v.values().stream())
+              .collect(Collectors.toList());
+      watcher.onNext(
+          PartitionManagerServiceProto.WatchResponse.newBuilder()
+              .addAllPartitions(partitions)
+              .build());
+    }
+  }
+
+  @Override
+  public StreamObserver<PartitionManagerServiceProto.WatchRequest> watch(
+      StreamObserver<PartitionManagerServiceProto.WatchResponse> responseObserver) {
+    partitionWatchers.add(responseObserver);
+    List<PartitionMeta> partitions =
+        topicPartitionMap.values().stream()
+            .flatMap(v -> v.values().stream())
+            .collect(Collectors.toList());
+    responseObserver.onNext(
+        PartitionManagerServiceProto.WatchResponse.newBuilder()
+            .addAllPartitions(partitions)
+            .build());
+    StreamObserver<PartitionManagerServiceProto.WatchRequest> requestObserver =
+        new StreamObserver<PartitionManagerServiceProto.WatchRequest>() {
+          @Override
+          public void onNext(PartitionManagerServiceProto.WatchRequest watchRequest) {}
+
+          @Override
+          public void onError(Throwable throwable) {
+            partitionWatchers.remove(responseObserver);
+            responseObserver.onCompleted();
+          }
+
+          @Override
+          public void onCompleted() {
+            partitionWatchers.remove(responseObserver);
+            responseObserver.onCompleted();
+          }
+        };
+    return requestObserver;
   }
 }

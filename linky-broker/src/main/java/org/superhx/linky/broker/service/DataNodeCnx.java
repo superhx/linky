@@ -22,12 +22,12 @@ import io.grpc.stub.StreamObserver;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.loadbalance.LinkyElection;
+import org.superhx.linky.controller.service.proto.PartitionManagerServiceGrpc;
+import org.superhx.linky.controller.service.proto.PartitionManagerServiceProto;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceGrpc;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
-import org.superhx.linky.service.proto.ControllerServiceGrpc;
-import org.superhx.linky.service.proto.ControllerServiceProto;
-import org.superhx.linky.service.proto.SegmentMeta;
+import org.superhx.linky.service.proto.*;
 
 import java.util.List;
 import java.util.Map;
@@ -146,6 +146,21 @@ public class DataNodeCnx {
     return result;
   }
 
+  public void redirectRecordPut(
+      PartitionMeta meta, PutRequest putRequest, StreamObserver<PutResponse> responseObserver) {
+    getRecordServiceStub(meta.getAddress()).put(putRequest, responseObserver);
+  }
+
+  public void redirectRecordGet(
+      PartitionMeta meta, GetRequest getRequest, StreamObserver<GetResponse> responseObserver) {
+    getRecordServiceStub(meta.getAddress()).get(getRequest, responseObserver);
+  }
+
+  public StreamObserver<PartitionManagerServiceProto.WatchRequest> watchPartition(
+      StreamObserver<PartitionManagerServiceProto.WatchResponse> responseObserver) {
+    return getPartitionManagerServiceStub().watch(responseObserver);
+  }
+
   private SegmentManagerServiceGrpc.SegmentManagerServiceStub getSegmentManagerServiceStub() {
     return SegmentManagerServiceGrpc.newStub(getControllerChannel());
   }
@@ -154,11 +169,22 @@ public class DataNodeCnx {
     return ControllerServiceGrpc.newStub(getControllerChannel());
   }
 
+  private PartitionManagerServiceGrpc.PartitionManagerServiceStub getPartitionManagerServiceStub() {
+    return PartitionManagerServiceGrpc.newStub(getControllerChannel());
+  }
+
   public SegmentServiceGrpc.SegmentServiceStub getSegmentServiceStub(String address) {
     return SegmentServiceGrpc.newStub(getChannel(address));
   }
 
+  private RecordServiceGrpc.RecordServiceStub getRecordServiceStub(String address) {
+    return RecordServiceGrpc.newStub(getChannel(address));
+  }
+
   private synchronized Channel getChannel(String address) {
+    if (address == null) {
+      return null;
+    }
     Channel channel = channels.get(address);
     if (channel != null) {
       return channel;

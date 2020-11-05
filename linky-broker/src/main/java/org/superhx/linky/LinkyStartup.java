@@ -93,10 +93,12 @@ public class LinkyStartup implements Lifecycle {
 
     // data node service start
     RecordService recordService = new RecordService();
+    components.add(recordService);
     PartitionService partitionService = new PartitionService();
     SegmentService segmentService = new SegmentService();
 
     recordService.setPartitionManager(partitionManager);
+    recordService.setDataNodeCnx(dataNodeCnx);
     partitionService.setPartitionManager(partitionManager);
     partitionService.setBrokerContext(brokerContext);
     segmentService.setLocalSegmentManager(localSegmentManager);
@@ -147,6 +149,7 @@ public class LinkyStartup implements Lifecycle {
             .addService(segmentService)
             .addService(controllerService)
             .addService(segmentRegistry)
+            .addService(partitionRegistry)
             .build();
   }
 

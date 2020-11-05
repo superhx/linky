@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package linky.controller;
+
+import 'PartitionMeta.proto';
+
+option java_package = "org.superhx.linky.controller.service.proto";
+option java_multiple_files = false;
+option java_outer_classname = "PartitionManagerServiceProto";
+
+service PartitionManagerService {
+    rpc watch(stream WatchRequest) returns (stream WatchResponse) {}
+}
+
+message WatchRequest {
+}
+
+message WatchResponse {
+    repeated PartitionMeta partitions = 1;
+}
