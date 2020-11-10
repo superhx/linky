@@ -14,7 +14,8 @@ message BatchRecord {
     int32 partition = 2;
     int32 segmentIndex = 3;
     int64 firstOffset = 4;
-    repeated Record records = 5;
+    int64 storeTimestamp = 5;
+    repeated Record records = 6;
 }
 
 message Record {

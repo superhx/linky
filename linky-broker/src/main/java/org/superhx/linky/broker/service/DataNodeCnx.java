@@ -27,6 +27,7 @@ import org.superhx.linky.controller.service.proto.PartitionManagerServiceProto;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceGrpc;
 import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
+import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.*;
 
 import java.util.List;
@@ -154,6 +155,29 @@ public class DataNodeCnx {
   public void redirectRecordGet(
       PartitionMeta meta, GetRequest getRequest, StreamObserver<GetResponse> responseObserver) {
     getRecordServiceStub(meta.getAddress()).get(getRequest, responseObserver);
+  }
+
+  public CompletableFuture<Void> reclaim(
+      String address, SegmentServiceProto.ReclaimRequest request) {
+    CompletableFuture<Void> rst = new CompletableFuture<>();
+    getSegmentServiceStub(address)
+        .reclaim(
+            request,
+            new StreamObserver<SegmentServiceProto.ReclaimResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.ReclaimResponse reclaimResponse) {
+                rst.complete(null);
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                rst.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return rst;
   }
 
   public StreamObserver<PartitionManagerServiceProto.WatchRequest> watchPartition(

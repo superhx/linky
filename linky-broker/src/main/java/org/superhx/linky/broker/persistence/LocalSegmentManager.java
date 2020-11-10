@@ -128,7 +128,7 @@ public class LocalSegmentManager implements Lifecycle {
                 SegmentKey key =
                     new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
                 Segment segment = segments.get(key);
-                segment = new RemoteSegment(meta, segment, dataNodeCnx);
+                segment = new DistributedSegment(meta, segment, dataNodeCnx);
                 segmentList.add(segment);
               }
               return CompletableFuture.completedFuture(segmentList);
@@ -147,7 +147,7 @@ public class LocalSegmentManager implements Lifecycle {
                 throw new IllegalStateException(String.format("cannot find segment %s", key));
               }
               log.info("create segment {}", segment);
-              return segment;
+              return new DistributedSegment(segment.getMeta(), segment, dataNodeCnx);
             });
   }
 

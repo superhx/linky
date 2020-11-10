@@ -82,11 +82,17 @@ public interface Segment extends Lifecycle {
    */
   void setEndOffset(long offset);
 
+  /**
+   * reclaim space before exclusive offset
+   * @param offset
+   */
+  CompletableFuture<Void> reclaimSpace(long offset);
+
+  long getReclaimOffset();
+
   SegmentMeta getMeta();
 
   CompletableFuture<Void> seal();
-
-  CompletableFuture<Void> seal0();
 
   default Status getStatus() {
     return Status.WRITABLE;

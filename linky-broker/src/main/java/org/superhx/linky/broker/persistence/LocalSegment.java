@@ -32,9 +32,11 @@ import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.List;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.REPLICA_BREAK;
 
@@ -53,6 +55,7 @@ public class LocalSegment implements Segment {
 
   private volatile long confirmOffset;
   private long endOffset;
+  private long reclaimOffset = NO_OFFSET;
 
   private Queue<Waiting> waitConfirmRequests = new ConcurrentLinkedQueue<>();
 
@@ -201,8 +204,9 @@ public class LocalSegment implements Segment {
       batchRecord =
           BatchRecord.newBuilder(batchRecord)
               .setTopicId(meta.getTopicId())
-              .setFirstOffset(offset)
               .setSegmentIndex(index)
+              .setFirstOffset(offset)
+              .setStoreTimestamp(System.currentTimeMillis())
               .build();
 
       CompletableFuture<Void> localWriteFuture = getLastChunk().append(batchRecord);
@@ -399,6 +403,17 @@ public class LocalSegment implements Segment {
   }
 
   @Override
+  public CompletableFuture<Void> reclaimSpace(long offset) {
+    reclaimOffset = offset;
+    return CompletableFuture.completedFuture(null);
+  }
+
+  @Override
+  public long getReclaimOffset() {
+    return reclaimOffset;
+  }
+
+  @Override
   public SegmentMeta getMeta() {
     return this.meta
         .clone()
@@ -415,20 +430,6 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<Void> seal() {
-    return seal0()
-        .thenCompose(
-            n ->
-                dataNodeCnx.seal(
-                    SegmentManagerServiceProto.SealRequest.newBuilder()
-                        .setTopicId(topicId)
-                        .setPartition(partition)
-                        .setIndex(index)
-                        .build()))
-        .thenAccept(l -> {});
-  }
-
-  @Override
-  public synchronized CompletableFuture<Void> seal0() {
     if (this.status == Status.READONLY) {
       return CompletableFuture.completedFuture(null);
     }
@@ -436,17 +437,17 @@ public class LocalSegment implements Segment {
     log.info("start seal segment {}", meta);
     return CompletableFuture.allOf(
             waitConfirmRequests.stream().map(w -> w.future).toArray(CompletableFuture[]::new))
-        .thenAccept(
-            r -> {
-              this.endOffset = this.confirmOffset;
-              this.meta.setEndOffset(endOffset);
-              this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
-              Utils.byte2file(
-                  Utils.pb2jsonBytes(this.meta),
-                  Utils.getSegmentMetaPath(
-                      this.brokerContext.getStorePath(), topicId, partition, index));
-              log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
-            });
+            .thenAccept(
+                    r -> {
+                      this.endOffset = this.confirmOffset;
+                      this.meta.setEndOffset(endOffset);
+                      this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
+                      Utils.byte2file(
+                              Utils.pb2jsonBytes(this.meta),
+                              Utils.getSegmentMetaPath(
+                                      this.brokerContext.getStorePath(), topicId, partition, index));
+                      log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
+                    });
   }
 
   private synchronized void checkWaiting() {

@@ -100,7 +100,7 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
         this.localSegmentManager.getSegment(
             request.getTopicId(), request.getPartition(), request.getIndex());
     segment
-        .seal0()
+        .seal()
         .thenAccept(
             r -> {
               responseObserver.onNext(
@@ -134,6 +134,13 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
         this.localSegmentManager.getSegment(
             request.getTopicId(), request.getPartition(), request.getIndex());
     segment.sync(request, responseObserver);
+  }
+
+  @Override
+  public void reclaim(
+      SegmentServiceProto.ReclaimRequest request,
+      StreamObserver<SegmentServiceProto.ReclaimResponse> responseObserver) {
+    super.reclaim(request, responseObserver);
   }
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {

@@ -26,26 +26,30 @@ import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
-public class RemoteSegment implements Segment {
-  private static final Logger log = LoggerFactory.getLogger(RemoteSegment.class);
+public class DistributedSegment implements Segment {
+  private static final Logger log = LoggerFactory.getLogger(DistributedSegment.class);
   private SegmentMeta.Builder meta;
   private DataNodeCnx dataNodeCnx;
   private int addressIndex;
   private String address;
   private Segment localSegment;
 
-  public RemoteSegment(SegmentMeta meta, Segment localSegment, DataNodeCnx dataNodeCnx) {
+  public DistributedSegment(SegmentMeta meta, Segment localSegment, DataNodeCnx dataNodeCnx) {
     this.meta = meta.toBuilder();
     this.dataNodeCnx = dataNodeCnx;
     this.address = meta.getReplicas(0).getAddress();
     this.localSegment = localSegment;
-    log.info("open remote segment {}", meta);
+    log.info("open distributed segment {}", meta);
   }
 
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-    throw new UnsupportedOperationException();
+    if (localSegment == null) {
+      throw new UnsupportedOperationException();
+    }
+    return localSegment.append(batchRecord);
   }
 
   @Override
@@ -135,7 +139,31 @@ public class RemoteSegment implements Segment {
   }
 
   @Override
+  public CompletableFuture<Void> reclaimSpace(long offset) {
+    SegmentServiceProto.ReclaimRequest request =
+        SegmentServiceProto.ReclaimRequest.newBuilder()
+            .setTopicId(meta.getTopicId())
+            .setPartition(meta.getPartition())
+            .setIndex(meta.getIndex())
+            .setOffset(offset)
+            .build();
+    return CompletableFuture.allOf(
+        meta.getReplicasList().stream()
+            .map(r -> dataNodeCnx.reclaim(r.getAddress(), request))
+            .collect(Collectors.toList())
+            .toArray(new CompletableFuture[0]));
+  }
+
+  @Override
+  public long getReclaimOffset() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public SegmentMeta getMeta() {
+    if (localSegment != null) {
+      return localSegment.getMeta();
+    }
     return meta.build();
   }
 
@@ -143,6 +171,9 @@ public class RemoteSegment implements Segment {
   public CompletableFuture<Void> seal() {
     if ((meta.getFlag() & SEAL_MARK) != 0) {
       return CompletableFuture.completedFuture(null);
+    }
+    if (localSegment != null) {
+      localSegment.seal();
     }
     return dataNodeCnx
         .seal(
@@ -152,10 +183,5 @@ public class RemoteSegment implements Segment {
                 .setIndex(meta.getIndex())
                 .build())
         .thenAccept(o -> meta.setEndOffset(o));
-  }
-
-  @Override
-  public CompletableFuture<Void> seal0() {
-    return CompletableFuture.completedFuture(null);
   }
 }
