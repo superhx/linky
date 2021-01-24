@@ -25,18 +25,15 @@ import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.service.DataNodeCnx;
-import org.superhx.linky.controller.service.proto.SegmentManagerServiceProto;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.List;
 import java.util.NavigableMap;
-import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.REPLICA_BREAK;
 
@@ -55,7 +52,6 @@ public class LocalSegment implements Segment {
 
   private volatile long confirmOffset;
   private long endOffset;
-  private long reclaimOffset = NO_OFFSET;
 
   private Queue<Waiting> waitConfirmRequests = new ConcurrentLinkedQueue<>();
 
@@ -283,7 +279,7 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
-    return getLastChunk().get(offset);
+    return getChunk(offset).get(offset);
   }
 
   @Override
@@ -404,13 +400,9 @@ public class LocalSegment implements Segment {
 
   @Override
   public CompletableFuture<Void> reclaimSpace(long offset) {
-    reclaimOffset = offset;
+    log.info("[RECLAIM] {} to {}", segmentId, offset);
+    getChunk(offset).setReclaimOffset(offset);
     return CompletableFuture.completedFuture(null);
-  }
-
-  @Override
-  public long getReclaimOffset() {
-    return reclaimOffset;
   }
 
   @Override
@@ -437,17 +429,17 @@ public class LocalSegment implements Segment {
     log.info("start seal segment {}", meta);
     return CompletableFuture.allOf(
             waitConfirmRequests.stream().map(w -> w.future).toArray(CompletableFuture[]::new))
-            .thenAccept(
-                    r -> {
-                      this.endOffset = this.confirmOffset;
-                      this.meta.setEndOffset(endOffset);
-                      this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
-                      Utils.byte2file(
-                              Utils.pb2jsonBytes(this.meta),
-                              Utils.getSegmentMetaPath(
-                                      this.brokerContext.getStorePath(), topicId, partition, index));
-                      log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
-                    });
+        .thenAccept(
+            r -> {
+              this.endOffset = this.confirmOffset;
+              this.meta.setEndOffset(endOffset);
+              this.meta.setFlag(this.meta.getFlag() | SEAL_MARK);
+              Utils.byte2file(
+                  Utils.pb2jsonBytes(this.meta),
+                  Utils.getSegmentMetaPath(
+                      this.brokerContext.getStorePath(), topicId, partition, index));
+              log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
+            });
   }
 
   private synchronized void checkWaiting() {
@@ -476,6 +468,13 @@ public class LocalSegment implements Segment {
 
   private Chunk getLastChunk() {
     return lastChunk;
+  }
+
+  private Chunk getChunk(long offset) {
+    if (lastChunk.getStartOffset() <= offset) {
+        return lastChunk;
+    }
+    return chunks.floorEntry(offset).getValue();
   }
 
   class Waiting<T> {

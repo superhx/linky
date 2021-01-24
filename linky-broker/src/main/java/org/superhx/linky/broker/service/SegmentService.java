@@ -140,7 +140,13 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
   public void reclaim(
       SegmentServiceProto.ReclaimRequest request,
       StreamObserver<SegmentServiceProto.ReclaimResponse> responseObserver) {
-    super.reclaim(request, responseObserver);
+    Segment segment =
+            this.localSegmentManager.getSegment(
+                    request.getTopicId(), request.getPartition(), request.getIndex());
+    segment.reclaimSpace(request.getOffset()).thenAccept(nil -> {
+      responseObserver.onNext(SegmentServiceProto.ReclaimResponse.newBuilder().build());
+      responseObserver.onCompleted();
+    });
   }
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {

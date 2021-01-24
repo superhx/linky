@@ -19,11 +19,13 @@ package org.superhx.linky.broker.persistence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.Configuration;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -160,6 +162,20 @@ public class JournalImpl implements Journal {
   @Override
   public String getPath() {
     return this.path;
+  }
+
+  @Override
+  public JournalLog getJournalLog(long offset) {
+    IFile log = iFiles.getFile(offset);
+    if (log == null) {
+      return null;
+    }
+    return new JournalLogImpl(log);
+  }
+
+  @Override
+  public void reclaimSpace(JournalLog log) {
+    iFiles.deleteFile(((JournalLogImpl) log).log);
   }
 
   @Override
@@ -326,6 +342,53 @@ public class JournalImpl implements Journal {
       if (!f.exists()) {
         boolean result = f.mkdirs();
         log.info(dirName + " mkdir " + (result ? "OK" : "Failed"));
+      }
+    }
+  }
+
+  class JournalLogImpl implements JournalLog {
+    private IFile log;
+
+    public JournalLogImpl(IFile log) {
+      this.log = log;
+    }
+
+    @Override
+    public long getStartOffset() {
+      return log.startOffset();
+    }
+
+    @Override
+    public long getLength() {
+      return log.length();
+    }
+
+    @Override
+    public Iterator<Record> iterator() {
+      return new RecordIterator();
+    }
+
+    class RecordIterator implements Iterator<Record> {
+      private long currentOffset;
+
+      public RecordIterator() {
+        currentOffset = log.startOffset();
+      }
+
+      @Override
+      public boolean hasNext() {
+        return currentOffset < log.startOffset() + log.length();
+      }
+
+      @Override
+      public Record next() {
+        try {
+          Record record = get(currentOffset).get();
+          currentOffset += record.getSize();
+          return record;
+        } catch (Exception e) {
+          throw new LinkyIOException(e);
+        }
       }
     }
   }

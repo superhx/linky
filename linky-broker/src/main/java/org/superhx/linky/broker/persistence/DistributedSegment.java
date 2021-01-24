@@ -155,11 +155,6 @@ public class DistributedSegment implements Segment {
   }
 
   @Override
-  public long getReclaimOffset() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public SegmentMeta getMeta() {
     if (localSegment != null) {
       return localSegment.getMeta();

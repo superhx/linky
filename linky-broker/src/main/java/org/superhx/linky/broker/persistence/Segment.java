@@ -88,8 +88,6 @@ public interface Segment extends Lifecycle {
    */
   CompletableFuture<Void> reclaimSpace(long offset);
 
-  long getReclaimOffset();
-
   SegmentMeta getMeta();
 
   CompletableFuture<Void> seal();

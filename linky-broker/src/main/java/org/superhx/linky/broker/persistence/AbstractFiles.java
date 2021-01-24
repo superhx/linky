@@ -195,4 +195,22 @@ public abstract class AbstractFiles implements IFiles {
       file.delete();
     }
   }
+
+  @Override
+  public IFile getFile(long position) {
+    IFile file = this.last;
+    if (position < file.startOffset()) {
+      file = startOffsets.floorEntry(position).getValue();
+    }
+    return file;
+  }
+
+  @Override
+  public void deleteFile(IFile file) {
+      if (file == this.last) {
+          return;
+      }
+      checkpoint.persist();
+      file.delete();
+  }
 }

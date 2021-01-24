@@ -21,6 +21,10 @@ public interface Journal extends Lifecycle {
 
   String getPath();
 
+  JournalLog getJournalLog(long offset);
+
+  void reclaimSpace(JournalLog log);
+
   class AppendResult {
     private long offset;
     private int size;

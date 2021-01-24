@@ -24,6 +24,7 @@ import org.superhx.linky.broker.loadbalance.SegmentKey;
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -32,6 +33,7 @@ public class ChunkManager implements Lifecycle {
   private List<LinkyData> linkyDatas = new ArrayList<>();
   private AtomicInteger roundRobin = new AtomicInteger();
   private Map<SegmentKey, List<Chunk>> segmentChunksMap = new ConcurrentHashMap<>();
+  private Map<Journal, List<Chunk>> journal2Chunks = new ConcurrentHashMap<>();
   private JournalManager journalManager;
   private IndexBuilderManager indexBuilderManager;
 
@@ -55,6 +57,7 @@ public class ChunkManager implements Lifecycle {
       }
       if (linky.getName().startsWith("linky")) {
         Journal journal = journalManager.getJournal(linky.getPath());
+        journal2Chunks.put(journal, new CopyOnWriteArrayList<>());
         IndexBuilder indexBuilder = indexBuilderManager.getIndexBuilder(linky.getPath());
         LinkyData linkyData = new LinkyData(linky.getPath(), journal, indexBuilder);
         linkyDatas.add(linkyData);
@@ -88,6 +91,7 @@ public class ChunkManager implements Lifecycle {
             segmentChunksMap.put(segmentKey, chunks);
           }
           chunks.add(chunk);
+          journal2Chunks.get(journal).add(chunk);
         }
       }
     }
@@ -113,6 +117,10 @@ public class ChunkManager implements Lifecycle {
         .orElse(Collections.emptyList());
   }
 
+  public Map<Journal, List<Chunk>> getChunks() {
+      return journal2Chunks;
+  }
+
   public synchronized Chunk newChunk(
       int topicId, int partition, int segmentIndex, long startOffset) {
     LinkyData linkyData =
@@ -132,6 +140,7 @@ public class ChunkManager implements Lifecycle {
       segmentChunksMap.put(segmentKey, chunks);
     }
     chunks.add(chunk);
+    journal2Chunks.get(linkyData.getJournal()).add(chunk);
     return chunk;
   }
 

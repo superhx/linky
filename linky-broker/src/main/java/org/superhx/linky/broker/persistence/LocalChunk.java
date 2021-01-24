@@ -17,12 +17,18 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import org.rocksdb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.LinkyIOException;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public class LocalChunk implements Chunk {
@@ -32,9 +38,32 @@ public class LocalChunk implements Chunk {
   private String storePath;
   private String name;
   private long startOffset;
+  private long reclaimOffset;
   private Journal journal;
   private IndexBuilder indexBuilder;
   private IFiles indexes;
+
+  public static void main(String... args) throws RocksDBException {
+    RocksDB.loadLibrary();
+    DBOptions options =
+        new DBOptions().setCreateIfMissing(true).setCreateMissingColumnFamilies(true);
+    ColumnFamilyOptions cfOptions = new ColumnFamilyOptions();
+    final List<ColumnFamilyDescriptor> cfDescriptors =
+        Arrays.asList(
+            new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOptions),
+            new ColumnFamilyDescriptor("INDEX".getBytes(), cfOptions));
+    final List<ColumnFamilyHandle> columnFamilyHandleList = new ArrayList<>();
+    RocksDB db =
+        RocksDB.open(options, "/Users/wumu.hx/linky", cfDescriptors, columnFamilyHandleList);
+    db.put("hello".getBytes(Utils.DEFAULT_CHARSET), "world1".getBytes(Utils.DEFAULT_CHARSET));
+    db.put(
+        columnFamilyHandleList.get(1),
+        "hello".getBytes(Utils.DEFAULT_CHARSET),
+        "world2".getBytes(Utils.DEFAULT_CHARSET));
+    System.out.println(new String(db.get("hello".getBytes(Utils.DEFAULT_CHARSET))));
+    System.out.println(
+        new String(db.get(columnFamilyHandleList.get(1), "hello".getBytes(Utils.DEFAULT_CHARSET))));
+  }
 
   public LocalChunk(String path, int topicId, int partition, int segmentIndex, long startOffset) {
     this.name = topicId + "@" + partition + "@" + segmentIndex + "@" + startOffset;
@@ -165,11 +194,58 @@ public class LocalChunk implements Chunk {
     indexes.delete();
   }
 
+  @Override
+  public void setReclaimOffset(long offset) {
+    this.reclaimOffset = offset;
+  }
+
+  @Override
+  public long getReclaimOffset() {
+    return reclaimOffset;
+  }
+
+  @Override
+  public Iterator<Index> indexIterator(long startOffset, long endOffset) {
+    return new IndexIterator(startOffset, endOffset);
+  }
+
   public void setJournal(Journal journal) {
     this.journal = journal;
   }
 
   public void setIndexBuilder(IndexBuilder indexBuilder) {
     this.indexBuilder = indexBuilder;
+  }
+
+  class IndexIterator implements Iterator<Index> {
+    private long startOffset;
+    private long endOffset;
+    private long currentOffset;
+
+    public IndexIterator(long startOffset, long endOffset) {
+      this.startOffset = startOffset;
+      this.endOffset = endOffset;
+      this.currentOffset = startOffset - 1;
+    }
+
+    @Override
+    public boolean hasNext() {
+      long offset = currentOffset + 1;
+      return offset < endOffset && offset < getConfirmOffset();
+    }
+
+    @Override
+    public Index next() {
+      long offset = ++currentOffset;
+      long relativeOffset = offset - startOffset;
+      try {
+        ByteBuffer buffer = indexes.read(relativeOffset * 12, 12).get();
+        long physicalOffset = buffer.getLong();
+        int size = buffer.getInt();
+        return new Index(offset, physicalOffset, size);
+      } catch (Exception e) {
+        throw new LinkyIOException(e);
+      }
+    }
   }
 }

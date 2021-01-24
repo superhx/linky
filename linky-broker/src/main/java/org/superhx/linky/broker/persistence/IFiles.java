@@ -44,6 +44,10 @@ public interface IFiles extends Lifecycle {
 
   void delete();
 
+  IFile getFile(long position);
+
+  void deleteFile(IFile file);
+
   class Checkpoint {
     private String path;
     private long slo;
