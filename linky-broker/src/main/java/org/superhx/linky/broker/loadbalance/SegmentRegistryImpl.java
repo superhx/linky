@@ -263,7 +263,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
         SegmentMeta.newBuilder()
             .setTopicId(request.getTopicId())
             .setPartition(request.getPartition())
-            .setStartOffset(request.getStartOffset())
             .setIndex(request.getLastIndex() + 1)
             .setReplicaNum(replicaNum);
     for (String address : replicas) {

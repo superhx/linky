@@ -27,6 +27,7 @@ import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
+import org.superhx.linky.service.proto.ChunkMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.List;
@@ -44,8 +45,7 @@ public class LocalSegment implements Segment {
   private int partition;
   private int index;
   private final String segmentId;
-  private long startOffset = NO_OFFSET;
-  private AtomicLong nextOffset;
+  private AtomicLong nextOffset = new AtomicLong();
   private Status status = Status.WRITABLE;
   private Role role;
   private List<Follower> followers = new CopyOnWriteArrayList<>();
@@ -57,7 +57,6 @@ public class LocalSegment implements Segment {
 
   private BrokerContext brokerContext;
   private DataNodeCnx dataNodeCnx;
-  private ChunkManager chunkManager;
   boolean sinking = false;
   private ScheduledFuture<?> followerScanner;
   private Chunk lastChunk;
@@ -80,23 +79,22 @@ public class LocalSegment implements Segment {
 
     this.brokerContext = brokerContext;
     this.dataNodeCnx = dataNodeCnx;
-    this.chunkManager = chunkManager;
-    this.setStartOffset(meta.getStartOffset());
     this.endOffset = meta.getEndOffset();
 
     List<Chunk> chunks = chunkManager.getChunks(topicId, partition, index);
     if (chunks.size() == 0) {
-      lastChunk = chunkManager.newChunk(topicId, partition, index, startOffset);
-      this.chunks.put(startOffset, lastChunk);
+      lastChunk =
+          chunkManager.newChunk(
+              ChunkMeta.newBuilder()
+                  .setTopicId(topicId)
+                  .setPartition(partition)
+                  .setSegmentIndex(index)
+                  .setStartOffset(0)
+                  .build());
+      this.chunks.put(0L, lastChunk);
     }
     for (Chunk chunk : chunks) {
-      try {
-        String[] parts = chunk.name().split("@");
-        long startOffset = Long.valueOf(parts[3]);
-        this.chunks.put(startOffset, chunk);
-      } catch (Exception ex) {
-        log.error("find broken chunk {}", chunk);
-      }
+      this.chunks.put(chunk.startOffset(), chunk);
     }
     lastChunk = this.chunks.lastEntry().getValue();
 
@@ -126,7 +124,7 @@ public class LocalSegment implements Segment {
                 if (!follower.isBroken()) {
                   continue;
                 }
-                followers.add(new Follower(follower.followerAddress, NO_OFFSET));
+                followers.add(new Follower(follower.followerAddress));
                 followers.remove(follower);
               }
             },
@@ -178,7 +176,7 @@ public class LocalSegment implements Segment {
                     .fork()
                     .run(
                         () -> {
-                          followers.add(new Follower(r.getAddress(), meta.getStartOffset()));
+                          followers.add(new Follower(r.getAddress()));
                         });
               });
     }
@@ -252,12 +250,7 @@ public class LocalSegment implements Segment {
               .build());
       return;
     }
-
-    if (startOffset == NO_OFFSET) {
-      setStartOffset(batchRecord.getFirstOffset());
-    }
     long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
-
     getLastChunk()
         .append(batchRecord)
         .thenAccept(
@@ -377,18 +370,6 @@ public class LocalSegment implements Segment {
   }
 
   @Override
-  public long getStartOffset() {
-    return startOffset;
-  }
-
-  @Override
-  public void setStartOffset(long offset) {
-    this.startOffset = offset;
-    this.nextOffset = new AtomicLong(this.startOffset);
-    this.confirmOffset = this.startOffset;
-  }
-
-  @Override
   public long getEndOffset() {
     return this.endOffset;
   }
@@ -401,7 +382,7 @@ public class LocalSegment implements Segment {
   @Override
   public CompletableFuture<Void> reclaimSpace(long offset) {
     log.info("[RECLAIM] {} to {}", segmentId, offset);
-    getChunk(offset).setReclaimOffset(offset);
+    // TODO: reclaim space
     return CompletableFuture.completedFuture(null);
   }
 
@@ -409,7 +390,6 @@ public class LocalSegment implements Segment {
   public SegmentMeta getMeta() {
     return this.meta
         .clone()
-        .setStartOffset(this.startOffset)
         .setEndOffset(this.endOffset)
         .clearReplicas()
         .addReplicas(
@@ -471,8 +451,8 @@ public class LocalSegment implements Segment {
   }
 
   private Chunk getChunk(long offset) {
-    if (lastChunk.getStartOffset() <= offset) {
-        return lastChunk;
+    if (lastChunk.startOffset() <= offset) {
+      return lastChunk;
     }
     return chunks.floorEntry(offset).getValue();
   }
@@ -514,7 +494,7 @@ public class LocalSegment implements Segment {
   }
 
   class Follower implements StreamObserver<SegmentServiceProto.ReplicateResponse>, Lifecycle {
-    private long expectedNextOffset;
+    private long expectedNextOffset = 0;
     private long confirmOffset = NO_OFFSET;
     private long writeOffset = NO_OFFSET;
     private String followerAddress;
@@ -522,22 +502,19 @@ public class LocalSegment implements Segment {
     private volatile boolean broken = false;
     Future<?> catchUpTask;
 
-    public Follower(String followerAddress, long startOffset) {
+    public Follower(String followerAddress) {
       this.followerAddress = followerAddress;
-      this.expectedNextOffset = startOffset;
       this.follower = dataNodeCnx.getSegmentServiceStub(followerAddress).replicate(this);
-      if (startOffset == NO_OFFSET) {
-        replicate(
-            SegmentServiceProto.ReplicateRequest.newBuilder()
-                .setBatchRecord(
-                    BatchRecord.newBuilder()
-                        .setTopicId(topicId)
-                        .setPartition(partition)
-                        .setSegmentIndex(index)
-                        .setFirstOffset(NO_OFFSET)
-                        .build())
-                .build());
-      }
+      replicate(
+          SegmentServiceProto.ReplicateRequest.newBuilder()
+              .setBatchRecord(
+                  BatchRecord.newBuilder()
+                      .setTopicId(topicId)
+                      .setPartition(partition)
+                      .setSegmentIndex(index)
+                      .setFirstOffset(NO_OFFSET)
+                      .build())
+              .build());
     }
 
     @Override
@@ -547,6 +524,7 @@ public class LocalSegment implements Segment {
       }
     }
 
+    // TODO: thread safe refactor & catch up async/traffic control
     public void replicate(SegmentServiceProto.ReplicateRequest request) {
       if (broken == true) {
         return;

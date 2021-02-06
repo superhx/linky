@@ -22,23 +22,22 @@ import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
+import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** index format [physical offset 8bytes][size 4bytes] 不同的索引可以索引到同一消息，然后通过消息里面的offset做过滤 */
 public class LocalPartitionImpl implements Partition {
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private PartitionMeta meta;
   private AtomicReference<PartitionStatus> status = new AtomicReference<>(PartitionStatus.NOOP);
   private List<Segment> segments;
   private volatile Segment lastSegment;
-  private NavigableMap<Long, Segment> segmentStartOffsets = new ConcurrentSkipListMap<>();
   private LocalSegmentManager localSegmentManager;
   private CompletableFuture<Segment> lastSegmentFuture;
   private Map<Segment, CompletableFuture<Segment>> nextSegmentFutures = new ConcurrentHashMap<>();
@@ -49,9 +48,11 @@ public class LocalPartitionImpl implements Partition {
 
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
+    ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
     return getLastSegment()
         .thenCompose(
             s -> {
+              cursor.putInt(s.getIndex());
               switch (s.getStatus()) {
                 case WRITABLE:
                 case REPLICA_LOSS:
@@ -61,7 +62,11 @@ public class LocalPartitionImpl implements Partition {
               }
               throw new LinkyIOException(String.format("Unknown status %s", s.getStatus()));
             })
-        .thenApply(appendResult -> new AppendResult(appendResult.getOffset()));
+        .thenApply(
+            appendResult -> {
+              cursor.putLong(appendResult.getOffset());
+              return new AppendResult(cursor.array());
+            });
   }
 
   protected CompletableFuture<Segment> getLastSegment() {
@@ -73,25 +78,16 @@ public class LocalPartitionImpl implements Partition {
         return lastSegmentFuture;
       }
 
-      long nextSegmentStartOffset = 0;
-      for (int i = 0; i < segments.size(); i++) {
-        Segment segment = segments.get(i);
-        if (segment.getStartOffset() < segment.getEndOffset()) {
-          nextSegmentStartOffset = segments.get(i).getEndOffset();
-        }
-      }
       lastSegmentFuture = new CompletableFuture();
       localSegmentManager
           .nextSegment(
               meta.getTopicId(),
               meta.getPartition(),
-              segments.isEmpty() ? Segment.NO_INDEX : segments.get(segments.size() - 1).getIndex(),
-              nextSegmentStartOffset)
+              segments.isEmpty() ? Segment.NO_INDEX : segments.get(segments.size() - 1).getIndex())
           .thenAccept(
               s -> {
                 lastSegmentFuture.complete(s);
                 this.lastSegment = s;
-                segmentStartOffsets.put(this.lastSegment.getStartOffset(), this.lastSegment);
                 segments.add(this.lastSegment);
               });
       return lastSegmentFuture;
@@ -115,14 +111,10 @@ public class LocalPartitionImpl implements Partition {
           .thenCompose(
               n ->
                   localSegmentManager.nextSegment(
-                      meta.getTopicId(),
-                      meta.getPartition(),
-                      lastSegment.getIndex(),
-                      lastSegment.getEndOffset()))
+                      meta.getTopicId(), meta.getPartition(), lastSegment.getIndex()))
           .thenAccept(
               s -> {
                 this.lastSegment = s;
-                segmentStartOffsets.put(s.getStartOffset(), s);
                 segments.add(s);
                 nextSegmentFutures.get(lastSegment).complete(s);
                 lastSegmentFuture = nextSegmentFutures.get(lastSegment);
@@ -138,18 +130,45 @@ public class LocalPartitionImpl implements Partition {
   }
 
   @Override
-  public CompletableFuture<BatchRecord> get(long offset) {
-    // fast path
-    if (this.lastSegment != null && this.lastSegment.getStartOffset() <= offset) {
-      Segment segment = this.lastSegment;
-      return segment.get(offset);
+  public CompletableFuture<GetResult> get(byte[] cursor) {
+    ByteBuffer cursorBuf = ByteBuffer.wrap(cursor);
+    int segmentIndex = cursorBuf.getInt();
+    long offset = cursorBuf.getLong();
+
+    GetResult getResult = new GetResult();
+    CompletableFuture<BatchRecord> recordFuture;
+    Segment segment = this.lastSegment;
+    if (segment != null && segment.getIndex() != segmentIndex) {
+      for (Segment seg : segments) {
+        if (seg.getIndex() == segmentIndex) {
+          if (seg.getEndOffset() != Segment.NO_OFFSET && seg.getEndOffset() <= offset) {
+            segmentIndex++;
+            offset = 0;
+            continue;
+          }
+          segment = seg;
+        }
+      }
     }
-    Map.Entry<Long, Segment> entry = segmentStartOffsets.floorEntry(offset);
-    if (entry == null) {
-      // offset is too small
-      return CompletableFuture.completedFuture(null);
+    if (segment != null) {
+      recordFuture = segment.get(offset);
+    } else {
+      recordFuture = CompletableFuture.completedFuture(null);
     }
-    return entry.getValue().get(offset);
+    ByteBuffer nextCursor = ByteBuffer.allocate(4 + 8);
+    nextCursor.putInt(segmentIndex);
+    long finalOffset = offset;
+    return recordFuture.thenApply(
+        r -> {
+          if (r == null) {
+            getResult.setStatus(GetStatus.NO_NEW_MSG);
+          } else {
+            getResult.setBatchRecord(r);
+            nextCursor.putLong(finalOffset + r.getRecordsCount());
+          }
+          getResult.setNextCursor(nextCursor.array());
+          return getResult;
+        });
   }
 
   @Override
@@ -166,6 +185,7 @@ public class LocalPartitionImpl implements Partition {
         .thenCompose(
             s -> {
               segments = new CopyOnWriteArrayList<>(s);
+              Collections.sort(segments, Comparator.comparingInt(Segment::getIndex));
               if (!segments.isEmpty()) {
                 return segments.get(segments.size() - 1).seal();
               }
@@ -173,12 +193,6 @@ public class LocalPartitionImpl implements Partition {
             })
         .thenAccept(
             n -> {
-              for (int i = 0; i < segments.size(); i++) {
-                Segment segment = segments.get(i);
-                if (segment.getStartOffset() < segment.getEndOffset()) {
-                  segmentStartOffsets.put(segment.getStartOffset(), segment);
-                }
-              }
               this.status.set(PartitionStatus.OPEN);
               log.info("partition {} opened", meta);
               openFuture.complete(this.status.get());

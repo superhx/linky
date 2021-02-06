@@ -43,7 +43,7 @@ public class DataNodeCnx {
   public DataNodeCnx() {}
 
   public CompletableFuture<Void> createSegment(
-      int topic, int partition, int lastIndex, long startOffset) {
+      int topic, int partition, int lastIndex) {
     CompletableFuture<Void> result = new CompletableFuture<>();
     getSegmentManagerServiceStub()
         .create(
@@ -52,7 +52,8 @@ public class DataNodeCnx {
                 .setPartition(partition)
                 .setLastIndex(lastIndex)
                 .setAddress(brokerContext.getAddress())
-                .setStartOffset(startOffset)
+                    // TODO:
+                .setStartOffset(0L)
                 .build(),
             new StreamObserver<SegmentManagerServiceProto.CreateResponse>() {
               @Override

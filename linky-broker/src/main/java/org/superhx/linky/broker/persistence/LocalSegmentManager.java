@@ -16,19 +16,18 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import com.google.protobuf.util.JsonFormat;
+import com.google.protobuf.InvalidProtocolBufferException;
+import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Lifecycle;
-import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.loadbalance.SegmentKey;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -41,39 +40,21 @@ public class LocalSegmentManager implements Lifecycle {
   private DataNodeCnx dataNodeCnx;
   private BrokerContext brokerContext;
   private ChunkManager chunkManager;
+  private PersistentMeta persistentMeta;
 
   @Override
   public void init() {
-    String segmentsDir = this.brokerContext.getStorePath() + "/segments";
-    Utils.ensureDirOK(segmentsDir);
-    File dir = new File(segmentsDir);
-    File[] topicDirs = dir.listFiles();
-    for (File topicDir : topicDirs) {
-      int topicId = Integer.valueOf(topicDir.getName());
-      File[] partitionDirs = topicDir.listFiles();
-      for (File partitionDir : partitionDirs) {
-        int partitionId = Integer.valueOf(partitionDir.getName());
-        File[] segmentDirs = partitionDir.listFiles();
-        for (File segmentDir : segmentDirs) {
-          int segmentIndex = Integer.valueOf(segmentDir.getName());
-          try {
-            String metaPath =
-                Utils.getSegmentMetaPath(
-                    this.brokerContext.getStorePath(), topicId, partitionId, segmentIndex);
-            String metaStr = Utils.file2str(metaPath);
-            if (metaStr == null) {
-              continue;
-            }
-            SegmentMeta.Builder builder = SegmentMeta.newBuilder();
-            JsonFormat.parser().merge(metaStr, builder);
-            SegmentMeta segmentMeta = builder.build();
-            log.info("load local segment {}", segmentMeta);
-            segments.put(
-                new SegmentKey(topicId, partitionId, segmentIndex),
-                new LocalSegment(segmentMeta, brokerContext, dataNodeCnx, chunkManager));
-          } catch (IOException e) {
-            continue;
-          }
+    try (RocksIterator it = persistentMeta.segmentMetaIterator()) {
+      for (; it.isValid(); it.next()) {
+        try {
+          SegmentMeta meta = SegmentMeta.parseFrom(it.value());
+          log.info("load local segment {}", meta);
+          segments.put(
+              new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex()),
+              new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager));
+        } catch (InvalidProtocolBufferException e) {
+          log.error("[SEGMENT_META_CORRUPT] unknown meta[{}]", it.value(), e);
+          continue;
         }
       }
     }
@@ -103,13 +84,7 @@ public class LocalSegmentManager implements Lifecycle {
       log.info("shutdown old local segment {}", meta);
       segment.shutdown();
     }
-    Utils.byte2file(
-        Utils.pb2jsonBytes(meta.toBuilder().clearReplicas()),
-        Utils.getSegmentMetaPath(
-            this.brokerContext.getStorePath(),
-            meta.getTopicId(),
-            meta.getPartition(),
-            meta.getIndex()));
+    persistentMeta.putSegmentMeta(meta.toBuilder().clearReplicas().build());
     segment = new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager);
     segment.init();
     segment.start();
@@ -136,9 +111,9 @@ public class LocalSegmentManager implements Lifecycle {
   }
 
   public CompletableFuture<Segment> nextSegment(
-      int topic, int partition, int lastIndex, long startOffset) {
+      int topic, int partition, int lastIndex) {
     return dataNodeCnx
-        .createSegment(topic, partition, lastIndex, startOffset)
+        .createSegment(topic, partition, lastIndex)
         .thenApply(
             r -> {
               SegmentKey key = new SegmentKey(topic, partition, lastIndex + 1);
@@ -169,5 +144,9 @@ public class LocalSegmentManager implements Lifecycle {
 
   public void setChunkManager(ChunkManager chunkManager) {
     this.chunkManager = chunkManager;
+  }
+
+  public void setPersistentMeta(PersistentMeta persistentMeta) {
+    this.persistentMeta = persistentMeta;
   }
 }

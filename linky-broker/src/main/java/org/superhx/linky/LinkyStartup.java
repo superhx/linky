@@ -52,18 +52,21 @@ public class LinkyStartup implements Lifecycle {
     log.info("broker {} startup", port);
 
     // persistent component start
+    PersistentMeta persistentMeta = new PersistentMeta(brokerContext.getStorePath());
+
     JournalManager journalManager = new JournalManager(brokerContext.getStorePath());
     components.add(journalManager);
-    ChunkManager chunkManager = new ChunkManager(brokerContext.getStorePath());
+    ChunkManager chunkManager = new ChunkManager();
     components.add(chunkManager);
-    IndexBuilderManager indexBuilderManager = new IndexBuilderManager(brokerContext.getStorePath());
-    components.add(indexBuilderManager);
+    IndexerManager indexerManager = new IndexerManager(brokerContext.getStorePath());
+    components.add(indexerManager);
 
     chunkManager.setJournalManager(journalManager);
-    chunkManager.setIndexBuilderManager(indexBuilderManager);
+    chunkManager.setIndexerManager(indexerManager);
+    chunkManager.setPersistentMeta(persistentMeta);
 
-    indexBuilderManager.setJournalManager(journalManager);
-    indexBuilderManager.setChunkManager(chunkManager);
+    indexerManager.setJournalManager(journalManager);
+    indexerManager.setChunkManager(chunkManager);
     // persistent component end
 
     // election component start
@@ -83,6 +86,7 @@ public class LinkyStartup implements Lifecycle {
     localSegmentManager.setDataNodeCnx(dataNodeCnx);
     localSegmentManager.setBrokerContext(brokerContext);
     localSegmentManager.setChunkManager(chunkManager);
+    localSegmentManager.setPersistentMeta(persistentMeta);
 
     partitionManager.setLocalSegmentManager(localSegmentManager);
 

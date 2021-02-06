@@ -22,10 +22,12 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.*;
 
+import java.nio.ByteBuffer;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class Client {
   static int count = 1;
@@ -34,7 +36,7 @@ public class Client {
 
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
-        ManagedChannelBuilder.forTarget("localhost:9593").usePlaintext().build();
+        ManagedChannelBuilder.forTarget("localhost:9591").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
     final AtomicLong maxOffset = new AtomicLong();
     long start = System.currentTimeMillis();
@@ -61,10 +63,11 @@ public class Client {
           new StreamObserver<PutResponse>() {
             @Override
             public void onNext(PutResponse putResponse) {
-              System.out.println(String.format("req return %s", putResponse));
-              if (maxOffset.get() < putResponse.getOffset() + 1) {
-                maxOffset.set(putResponse.getOffset() + 1);
-              }
+              ByteString bs = putResponse.getCursor();
+              ByteBuffer buf = ByteBuffer.wrap(bs.toByteArray());
+              System.out.println(
+                  String.format(
+                      "req return %s seg %s segOff", putResponse, buf.getInt(), buf.getLong()));
             }
 
             @Override
@@ -82,21 +85,31 @@ public class Client {
     System.out.println(
         String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
-    for (int i = 0; i < maxOffset.get(); i++) {
-      //          for (int i = 202; i < 203; i++) {
-
-      latch = new CountDownLatch(1);
-      CountDownLatch finalLatch = latch;
+    AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
+    for (int i = 0; i < 2; i++) {
+      CountDownLatch getLatch = new CountDownLatch(1);
       stub.get(
-          GetRequest.newBuilder().setTopic("FOO").setPartition(0).setOffset(i).build(),
+          GetRequest.newBuilder()
+              .setTopic("FOO")
+              .setPartition(0)
+              .setCursor(ByteString.copyFrom(cursor.get()))
+              .build(),
           new StreamObserver<GetResponse>() {
             @Override
             public void onNext(GetResponse getResponse) {
+              ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
               System.out.println(
                   "Get return offset:"
                       + getResponse.getBatchRecord().getFirstOffset()
                       + " count:"
-                      + getResponse.getBatchRecord().getRecordsCount() + " record:" + getResponse.getBatchRecord());
+                      + getResponse.getBatchRecord().getRecordsCount()
+                      + " record:"
+                      + getResponse.getBatchRecord()
+                      + " next: seg "
+                      + buf.getInt()
+                      + " segOffset "
+                      + buf.getLong());
+              cursor.set(buf.array());
             }
 
             @Override
@@ -106,10 +119,10 @@ public class Client {
 
             @Override
             public void onCompleted() {
-              finalLatch.countDown();
+              getLatch.countDown();
             }
           });
-      latch.await();
+      getLatch.await();
     }
     channel.shutdownNow().awaitTermination(1, TimeUnit.SECONDS);
   }

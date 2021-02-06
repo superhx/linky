@@ -22,6 +22,7 @@ import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.Utils;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -63,7 +64,11 @@ public class JournalManager implements Lifecycle {
     journals.values().forEach(j -> j.shutdown());
   }
 
-  public Journal getJournal(String path) {
+  public Map<String, Journal> journals() {
+    return Collections.unmodifiableMap(journals);
+  }
+
+  public Journal journal(String path) {
     return journals.get(path);
   }
 }

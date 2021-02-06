@@ -27,20 +27,22 @@ message PutResponse {
         FAIL = 1;
     }
     Status status = 1;
-    int64 offset = 2;
+    bytes cursor = 2;
 }
 
 message GetRequest {
     string topic = 1;
     int32 partition = 2;
-    int64 offset = 3;
+    bytes cursor = 3;
 }
 
 message GetResponse {
     enum Status {
         SUCCESS = 0;
         FAIL = 1;
+        NO_NEW_MSG = 2;
     }
     Status status = 1;
     BatchRecord batchRecord = 2;
+    bytes nextCursor = 3;
 }

@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.service;
 
+import com.google.protobuf.ByteString;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,7 +60,7 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
               PutResponse response =
                   PutResponse.newBuilder()
                       .setStatus(PutResponse.Status.SUCCESS)
-                      .setOffset(appendResult.getOffset())
+                      .setCursor(ByteString.copyFrom(appendResult.getCursor()))
                       .build();
               responseObserver.onNext(response);
               responseObserver.onCompleted();
@@ -84,10 +85,14 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
       return;
     }
     partition
-        .get(request.getOffset())
+        .get(request.getCursor().toByteArray())
         .thenAccept(
             getResult -> {
-              GetResponse response = GetResponse.newBuilder().setBatchRecord(getResult).build();
+              GetResponse response =
+                  GetResponse.newBuilder()
+                      .setBatchRecord(getResult.getBatchRecord())
+                      .setNextCursor(ByteString.copyFrom(getResult.getNextCursor()))
+                      .build();
               responseObserver.onNext(response);
               responseObserver.onCompleted();
             })

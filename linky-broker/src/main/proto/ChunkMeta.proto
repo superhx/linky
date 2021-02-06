@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package linky;
+
+option java_package = "org.superhx.linky.service.proto";
+option java_multiple_files = true;
+option java_outer_classname = "ChunkMetaProto";
+
+message ChunkMeta {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 segmentIndex = 3;
+    int32 chunkId = 4;
+    int64 startOffset = 5;
+    string path = 6;
+
+}

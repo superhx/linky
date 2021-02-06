@@ -119,16 +119,6 @@ public class DistributedSegment implements Segment {
   }
 
   @Override
-  public long getStartOffset() {
-    return this.meta.getStartOffset();
-  }
-
-  @Override
-  public void setStartOffset(long offset) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public long getEndOffset() {
     return this.meta.getEndOffset();
   }

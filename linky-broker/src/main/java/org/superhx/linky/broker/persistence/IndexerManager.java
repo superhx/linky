@@ -24,12 +24,12 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
-public class IndexBuilderManager implements Lifecycle {
-  private Map<String, IndexBuilder> indexBuilderMap = new HashMap<>();
+public class IndexerManager implements Lifecycle {
+  private Map<String, Indexer> indexBuilderMap = new HashMap<>();
   private JournalManager journalManager;
   private ChunkManager chunkManager;
 
-  public IndexBuilderManager(String path) {
+  public IndexerManager(String path) {
     String dataDirPath = path + "/data";
     Utils.ensureDirOK(dataDirPath + "/linky");
     File dataDir = new File(dataDirPath);
@@ -43,8 +43,8 @@ public class IndexBuilderManager implements Lifecycle {
       }
       if (linky.getName().startsWith("linky")) {
         String journalPath = linky.getPath();
-        IndexBuilder indexBuilder = new IndexBuilder(journalPath);
-        indexBuilderMap.put(linky.getPath(), indexBuilder);
+        Indexer indexer = new Indexer(journalPath + "/index");
+        indexBuilderMap.put(linky.getPath(), indexer);
       }
     }
   }
@@ -52,10 +52,10 @@ public class IndexBuilderManager implements Lifecycle {
   @Override
   public void init() {
     for (String path : indexBuilderMap.keySet()) {
-      IndexBuilder indexBuilder = indexBuilderMap.get(path);
-      indexBuilder.setJournal(journalManager.getJournal(path));
-      indexBuilder.setChunkManager(chunkManager);
-      indexBuilder.init();
+      Indexer indexer = indexBuilderMap.get(path);
+      indexer.setJournal(journalManager.journal(path));
+      indexer.setChunkManager(chunkManager);
+      indexer.init();
     }
   }
 
@@ -69,7 +69,7 @@ public class IndexBuilderManager implements Lifecycle {
     indexBuilderMap.values().forEach(i -> i.shutdown());
   }
 
-  public IndexBuilder getIndexBuilder(String path) {
+  public Indexer getIndexBuilder(String path) {
     return indexBuilderMap.get(path);
   }
 

@@ -23,46 +23,81 @@ import java.util.concurrent.CompletableFuture;
 
 public interface Partition {
 
-    CompletableFuture<AppendResult> append(BatchRecord batchRecord);
+  CompletableFuture<AppendResult> append(BatchRecord batchRecord);
 
-    CompletableFuture<BatchRecord> get(long offset);
+  CompletableFuture<GetResult> get(byte[] cursor);
 
-    CompletableFuture<PartitionStatus> open();
+  CompletableFuture<PartitionStatus> open();
 
-    CompletableFuture<Void> close();
+  CompletableFuture<Void> close();
 
-    PartitionStatus status();
+  PartitionStatus status();
 
-    PartitionMeta meta();
+  PartitionMeta meta();
 
-    class AppendResult {
-        private Status status = Status.SUCCESS;
-        private long   offset;
+  class AppendResult {
+    private AppendStatus status = AppendStatus.SUCCESS;
+    private byte[] cursor;
 
-        public AppendResult(long offset) {
-            this.offset = offset;
-        }
-
-        public Status getStatus() {
-            return status;
-        }
-
-        public void setStatus(Status status) {
-            this.status = status;
-        }
-
-        public long getOffset() {
-            return offset;
-        }
-
-        public void setOffset(long offset) {
-            this.offset = offset;
-        }
+    public AppendResult(byte[] cursor) {
+      this.cursor = cursor;
     }
 
-    enum Status {
-                 SUCCESS;
+    public AppendStatus getStatus() {
+      return status;
     }
+
+    public void setStatus(AppendStatus status) {
+      this.status = status;
+    }
+
+    public byte[] getCursor() {
+      return cursor;
+    }
+
+    public void setCursor(byte[] cursor) {
+      this.cursor = cursor;
+    }
+  }
+
+  enum AppendStatus {
+    SUCCESS;
+  }
+
+  class GetResult {
+    private BatchRecord batchRecord;
+    private byte[] nextCursor;
+    private GetStatus status = GetStatus.SUCCESS;
+
+    public BatchRecord getBatchRecord() {
+      return batchRecord;
+    }
+
+    public void setBatchRecord(BatchRecord batchRecord) {
+      this.batchRecord = batchRecord;
+    }
+
+    public byte[] getNextCursor() {
+      return nextCursor;
+    }
+
+    public void setNextCursor(byte[] nextCursor) {
+      this.nextCursor = nextCursor;
+    }
+
+    public GetStatus getStatus() {
+      return status;
+    }
+
+    public void setStatus(GetStatus status) {
+      this.status = status;
+    }
+  }
+
+  enum GetStatus {
+    SUCCESS,
+    NO_NEW_MSG;
+  }
 
   enum PartitionStatus {
     NOOP,

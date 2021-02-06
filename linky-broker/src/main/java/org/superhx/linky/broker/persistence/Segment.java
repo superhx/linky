@@ -46,6 +46,7 @@ public interface Segment extends Lifecycle {
     throw new UnsupportedOperationException();
   }
 
+  // TODO: remove sync, keep segment main & follower even after sealed
   default void sync(
       SegmentServiceProto.SyncRequest request,
       StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
@@ -53,20 +54,6 @@ public interface Segment extends Lifecycle {
   }
 
   int getIndex();
-
-  /**
-   * get inclusive relative start offset
-   *
-   * @return
-   */
-  long getStartOffset();
-
-  /**
-   * set inclusive relative start offset
-   *
-   * @param offset
-   */
-  void setStartOffset(long offset);
 
   /**
    * get exclusive relative end offset

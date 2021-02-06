@@ -19,32 +19,25 @@ package org.superhx.linky.broker.persistence;
 import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.service.proto.BatchRecord;
 
-import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 
 public interface Chunk extends Lifecycle {
 
-  String name();
+  int chunkId();
 
   CompletableFuture<Void> append(BatchRecord batchRecord);
 
   CompletableFuture<BatchRecord> get(long offset);
 
-  long getStartOffset();
+  long startOffset();
 
   long getConfirmOffset();
 
-  void putIndex(Index index);
-
-  void forceIndex();
-
-  void delete();
-
   void setReclaimOffset(long offset);
-
-  long getReclaimOffset();
-
-  Iterator<Index> indexIterator(long startOffset, long endOffset);
+  //
+  //  long getReclaimOffset();
+  //
+  //  Iterator<Index> indexIterator(long startOffset, long endOffset);
 
   class AppendResult {
     private long offset;

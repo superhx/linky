@@ -16,12 +16,15 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+import org.rocksdb.RocksIterator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.Lifecycle;
-import org.superhx.linky.broker.LinkyIOException;
-import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.loadbalance.SegmentKey;
+import org.superhx.linky.service.proto.ChunkMeta;
 
-import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -29,62 +32,44 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public class ChunkManager implements Lifecycle {
-  private String path;
+  private static final Logger log = LoggerFactory.getLogger(LocalChunk.class);
+  private AtomicInteger atomicChunkId = new AtomicInteger();
+
   private List<LinkyData> linkyDatas = new ArrayList<>();
   private AtomicInteger roundRobin = new AtomicInteger();
   private Map<SegmentKey, List<Chunk>> segmentChunksMap = new ConcurrentHashMap<>();
   private Map<Journal, List<Chunk>> journal2Chunks = new ConcurrentHashMap<>();
   private JournalManager journalManager;
-  private IndexBuilderManager indexBuilderManager;
+  private IndexerManager indexerManager;
+  private PersistentMeta persistentMeta;
 
-  public ChunkManager(String path) {
-    this.path = path;
-    String dataDirPath = path + "/data";
-    Utils.ensureDirOK(dataDirPath);
-  }
+  public ChunkManager() {}
 
   @Override
   public void init() {
-    String dataDirPath = path + "/data";
-    File dataDir = new File(dataDirPath);
-    File[] linkys = dataDir.listFiles();
-    if (linkys == null) {
-      throw new LinkyIOException(String.format("%s is not directory", dataDirPath));
-    }
-    for (File linky : linkys) {
-      if (linky.isFile()) {
-        continue;
-      }
-      if (linky.getName().startsWith("linky")) {
-        Journal journal = journalManager.getJournal(linky.getPath());
-        journal2Chunks.put(journal, new CopyOnWriteArrayList<>());
-        IndexBuilder indexBuilder = indexBuilderManager.getIndexBuilder(linky.getPath());
-        LinkyData linkyData = new LinkyData(linky.getPath(), journal, indexBuilder);
-        linkyDatas.add(linkyData);
-        String chunksDirPath = linky.getPath() + "/chunks";
-        Utils.ensureDirOK(chunksDirPath);
-        File chunksDir = new File(chunksDirPath);
-        File[] chunkDirs = chunksDir.listFiles();
-        if (chunkDirs == null) {
-          throw new LinkyIOException(String.format("%s is not directory", chunksDirPath));
-        }
-        for (File chunkDir : chunkDirs) {
-          if (chunkDir.isFile() || !chunkDir.getName().startsWith("chunk.")) {
-            continue;
-          }
-          String info = chunkDir.getName().substring(chunkDir.getName().indexOf(".") + 1);
-          String[] parts = info.split("@");
-          int topicId = Integer.valueOf(parts[0]);
-          int partition = Integer.valueOf(parts[1]);
-          int segmentIndex = Integer.valueOf(parts[2]);
-          long startOffset = Integer.valueOf(parts[3]);
+    journalManager
+        .journals()
+        .forEach(
+            (path, journal) -> {
+              journal2Chunks.put(journal, new CopyOnWriteArrayList<>());
+              linkyDatas.add(new LinkyData(path, journal, indexerManager.getIndexBuilder(path)));
+            });
 
-          Chunk chunk =
-              new LocalChunk(chunksDirPath, topicId, partition, segmentIndex, startOffset);
-          ((LocalChunk) chunk).setJournal(journal);
-          ((LocalChunk) chunk).setIndexBuilder(indexBuilder);
+    int chunkIdMax = 0;
+    try (RocksIterator it = persistentMeta.chunkMetaIterator()) {
+      for (; it.isValid(); it.next()) {
+        int chunkId = ByteBuffer.wrap(it.key()).getInt();
+        chunkIdMax = Math.max(chunkIdMax, chunkId);
+        try {
+          ChunkMeta meta = ChunkMeta.parseFrom(it.value());
+          Journal journal = journalManager.journal(meta.getPath());
+          Indexer indexer = indexerManager.getIndexBuilder(meta.getPath());
+          LocalChunk chunk = new LocalChunk(meta);
+          chunk.setJournal(journal);
+          chunk.setIndexer(indexer);
           chunk.init();
-          SegmentKey segmentKey = new SegmentKey(topicId, partition, segmentIndex);
+          SegmentKey segmentKey =
+              new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getSegmentIndex());
           List<Chunk> chunks = segmentChunksMap.get(segmentKey);
           if (chunks == null) {
             chunks = new ArrayList<>(1);
@@ -92,12 +77,16 @@ public class ChunkManager implements Lifecycle {
           }
           chunks.add(chunk);
           journal2Chunks.get(journal).add(chunk);
+        } catch (InvalidProtocolBufferException e) {
+          log.error("[CHUNK_META_CORRUPT] unknown chunkid[{}] meta[{}]", chunkId, it.value(), e);
+          continue;
         }
       }
     }
+    atomicChunkId.set(chunkIdMax);
     segmentChunksMap
         .values()
-        .forEach(l -> Collections.sort(l, Comparator.comparingLong(Chunk::getStartOffset)));
+        .forEach(l -> Collections.sort(l, Comparator.comparingLong(Chunk::startOffset)));
   }
 
   @Override
@@ -118,22 +107,27 @@ public class ChunkManager implements Lifecycle {
   }
 
   public Map<Journal, List<Chunk>> getChunks() {
-      return journal2Chunks;
+    return journal2Chunks;
   }
 
-  public synchronized Chunk newChunk(
-      int topicId, int partition, int segmentIndex, long startOffset) {
+  public synchronized Chunk newChunk(ChunkMeta meta) {
+    ChunkMeta.Builder metaBuilder = meta.toBuilder();
+    int chunkId = atomicChunkId.incrementAndGet();
+    metaBuilder.setChunkId(chunkId);
     LinkyData linkyData =
         linkyDatas.get(Math.abs(roundRobin.incrementAndGet() % linkyDatas.size()));
-    Chunk chunk =
-        new LocalChunk(
-            linkyData.getPath() + "/chunks", topicId, partition, segmentIndex, startOffset);
-    ((LocalChunk) chunk).setJournal(linkyData.getJournal());
-    ((LocalChunk) chunk).setIndexBuilder(linkyData.getIndexBuilder());
+    metaBuilder.setPath(linkyData.getPath());
+    meta = metaBuilder.build();
+    LocalChunk chunk = new LocalChunk(meta);
+    chunk.setJournal(linkyData.getJournal());
+    chunk.setIndexer(linkyData.getIndexer());
+    persistentMeta.putChunkMeta(meta);
+
     chunk.init();
     chunk.start();
 
-    SegmentKey segmentKey = new SegmentKey(topicId, partition, segmentIndex);
+    SegmentKey segmentKey =
+        new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getSegmentIndex());
     List<Chunk> chunks = segmentChunksMap.get(segmentKey);
     if (chunks == null) {
       chunks = new ArrayList<>(1);
@@ -152,19 +146,23 @@ public class ChunkManager implements Lifecycle {
     this.journalManager = journalManager;
   }
 
-  public void setIndexBuilderManager(IndexBuilderManager indexBuilderManager) {
-    this.indexBuilderManager = indexBuilderManager;
+  public void setIndexerManager(IndexerManager indexerManager) {
+    this.indexerManager = indexerManager;
+  }
+
+  public void setPersistentMeta(PersistentMeta persistentMeta) {
+    this.persistentMeta = persistentMeta;
   }
 
   static class LinkyData {
     private String path;
     private Journal journal;
-    private IndexBuilder indexBuilder;
+    private Indexer indexer;
 
-    public LinkyData(String path, Journal journal, IndexBuilder indexBuilder) {
+    public LinkyData(String path, Journal journal, Indexer indexer) {
       this.path = path;
       this.journal = journal;
-      this.indexBuilder = indexBuilder;
+      this.indexer = indexer;
     }
 
     public String getPath() {
@@ -175,8 +173,8 @@ public class ChunkManager implements Lifecycle {
       return journal;
     }
 
-    public IndexBuilder getIndexBuilder() {
-      return indexBuilder;
+    public Indexer getIndexer() {
+      return indexer;
     }
   }
 }

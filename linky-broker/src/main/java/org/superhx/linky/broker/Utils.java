@@ -114,19 +114,6 @@ public class Utils {
     }
   }
 
-  public static String file2str(String path) {
-    File file = new File(path);
-    if (!file.exists()) {
-      return null;
-    }
-    try {
-      String str = Files.asCharSource(file, DEFAULT_CHARSET).read();
-      return str;
-    } catch (IOException e) {
-      throw new LinkyIOException(e);
-    }
-  }
-
   public static NodeMeta partitionMeta2NodeMeta(PartitionMeta meta) {
     if (meta == null) {
       return null;
