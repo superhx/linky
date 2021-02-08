@@ -38,7 +38,7 @@ public class ControllerService extends ControllerServiceGrpc.ControllerServiceIm
               responseObserver.onCompleted();
             });
     for (SegmentMeta segmentMeta : request.getSegmentsList()) {
-      segmentRegistry.register(segmentMeta);
+      segmentRegistry.register(request.getNode(), segmentMeta);
     }
   }
 

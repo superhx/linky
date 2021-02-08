@@ -27,7 +27,6 @@ import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -45,10 +44,10 @@ public class LocalSegmentManager implements Lifecycle {
   @Override
   public void init() {
     try (RocksIterator it = persistentMeta.segmentMetaIterator()) {
-      for (; it.isValid(); it.next()) {
+      for (it.seekToFirst(); it.isValid(); it.next()) {
         try {
           SegmentMeta meta = SegmentMeta.parseFrom(it.value());
-          log.info("load local segment {}", meta);
+          log.info("[SEGMENT_LOAD]{}", meta);
           segments.put(
               new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex()),
               new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager));
@@ -110,8 +109,7 @@ public class LocalSegmentManager implements Lifecycle {
             });
   }
 
-  public CompletableFuture<Segment> nextSegment(
-      int topic, int partition, int lastIndex) {
+  public CompletableFuture<Segment> nextSegment(int topic, int partition, int lastIndex) {
     return dataNodeCnx
         .createSegment(topic, partition, lastIndex)
         .thenApply(

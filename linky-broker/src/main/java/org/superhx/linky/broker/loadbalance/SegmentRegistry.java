@@ -16,12 +16,13 @@
  */
 package org.superhx.linky.broker.loadbalance;
 
+import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
 import java.util.Map;
 
 public interface SegmentRegistry {
 
-    void register(SegmentMeta segment);
+    void register(NodeMeta node, SegmentMeta segment);
 
 }

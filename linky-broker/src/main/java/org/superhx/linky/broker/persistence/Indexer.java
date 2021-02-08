@@ -36,17 +36,16 @@ import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
 public class Indexer implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(Indexer.class);
   private static final String CHUNK_INDEX_COLUMN_FAMILY = "CI";
+  private static final byte[] WAL_SLO_KEY = "walSlo".getBytes(Utils.DEFAULT_CHARSET);
 
   static {
     RocksDB.loadLibrary();
   }
 
-  private String storePath;
   private Status status;
   private Journal journal;
   private ChunkManager chunkManager;
   private long walSlo;
-  private Checkpoint checkpoint;
   private BlockingQueue<BatchIndex> waitingPutIndexes = new LinkedBlockingQueue<>();
   private ExecutorService putIndexExecutor = Utils.newFixedThreadPool(1, "IndexBuilderPut-");
   private ScheduledExecutorService forceIndexScheduler =
@@ -56,7 +55,6 @@ public class Indexer implements Lifecycle {
 
   public Indexer(String storePath) {
     Utils.ensureDirOK(storePath);
-    this.storePath = storePath;
     DBOptions options =
         new DBOptions().setCreateIfMissing(true).setCreateMissingColumnFamilies(true);
     ColumnFamilyOptions cfOptions = new ColumnFamilyOptions();
@@ -68,6 +66,10 @@ public class Indexer implements Lifecycle {
     try {
       rocksDB = RocksDB.open(options, storePath, cfDescriptors, columnFamilyHandleList);
       chunkIndexFamilyHandle = columnFamilyHandleList.get(1);
+      byte[] walSloBytes = rocksDB.get(WAL_SLO_KEY);
+      if (walSloBytes != null) {
+        walSlo = ByteBuffer.wrap(walSloBytes).getLong();
+      }
     } catch (RocksDBException e) {
       throw new LinkyIOException(e);
     }
@@ -75,15 +77,6 @@ public class Indexer implements Lifecycle {
 
   @Override
   public void init() {
-    String checkpointPath = storePath + "/indexCheckpoint.json";
-    checkpoint = Checkpoint.load(checkpointPath);
-    walSlo = checkpoint.getWalLso();
-    recover();
-  }
-
-  @Override
-  public void start() {
-    status = Status.START;
     putIndexExecutor.submit(
         () -> {
           try {
@@ -94,14 +87,19 @@ public class Indexer implements Lifecycle {
           }
         });
     forceIndexScheduler.scheduleWithFixedDelay(() -> doForeIndex(), 10, 10, TimeUnit.MILLISECONDS);
+    recover();
+  }
+
+  @Override
+  public void start() {
+    status = Status.START;
   }
 
   @Override
   public void shutdown() {
     status = Status.SHUTDOWN;
     putIndexExecutor.shutdown();
-    checkpoint.setWalLso(walSlo);
-    checkpoint.persist();
+    doForeIndex();
   }
 
   protected void recover() {
@@ -140,7 +138,8 @@ public class Indexer implements Lifecycle {
               .setSegmentIndex(batchRecord.getSegmentIndex())
               .setCount(batchRecord.getRecordsCount())
               .setPhysicalOffset(record.getOffset())
-              .setSize(record.getSize());
+              .setSize(record.getSize())
+              .setTerm(batchRecord.getTerm());
       List<Chunk> chunks =
           chunkManager.getChunks(
               batchRecord.getTopicId(), batchRecord.getPartition(), batchRecord.getSegmentIndex());
@@ -199,11 +198,23 @@ public class Indexer implements Lifecycle {
     if (!it.isValid()) {
       return null;
     }
-    byte[] value = it.value();
-    ByteBuffer buffer = ByteBuffer.wrap(value);
-    batchIndex.physicalOffset = buffer.getLong();
-    batchIndex.size = buffer.getInt();
+    fillKey(batchIndex, it.key());
+    fillValue(batchIndex, it.value());
     return batchIndex;
+  }
+
+  static void fillKey(BatchIndex index, byte[] key) {
+    ByteBuffer buffer = ByteBuffer.wrap(key);
+    buffer.getInt();
+    index.offset = buffer.getLong();
+    index.count = buffer.getInt();
+    index.term = buffer.getInt();
+  }
+
+  static void fillValue(BatchIndex index, byte[] value) {
+    ByteBuffer buffer = ByteBuffer.wrap(value);
+    index.physicalOffset = buffer.getLong();
+    index.size = buffer.getInt();
   }
 
   protected void doPutIndex() throws RocksDBException {
@@ -225,10 +236,11 @@ public class Indexer implements Lifecycle {
   }
 
   static byte[] indexKey(BatchIndex index) {
-    ByteBuffer buffer = ByteBuffer.allocate(4 + 8 + 4);
+    ByteBuffer buffer = ByteBuffer.allocate(4 + 8 + 4 + 4);
     buffer.putInt(index.getChunk().chunkId());
     buffer.putLong(index.getOffset());
     buffer.putInt(index.getCount());
+    buffer.putInt(index.getTerm());
     return buffer.array();
   }
 
@@ -241,11 +253,14 @@ public class Indexer implements Lifecycle {
 
   protected void doForeIndex() {
     long walSlo = this.walSlo;
-    //    chunkManager.foreach(
-    //        c -> {
-    //          c.forceIndex();
-    //        });
-    checkpoint.setWalLso(walSlo);
+    try {
+      rocksDB.flush(new FlushOptions().setWaitForFlush(true));
+      ByteBuffer walSloBytes = ByteBuffer.allocate(8);
+      walSloBytes.putLong(walSlo);
+      rocksDB.put(WAL_SLO_KEY, walSloBytes.array());
+    } catch (RocksDBException e) {
+      e.printStackTrace();
+    }
   }
 
   public void setJournal(Journal journal) {
@@ -261,6 +276,7 @@ public class Indexer implements Lifecycle {
     private int partition;
     private int segmentIndex;
     private long offset;
+    private int term;
     private long physicalOffset;
     private int size;
     private int count;
@@ -301,6 +317,14 @@ public class Indexer implements Lifecycle {
     public static Builder newBuilder() {
       return new Builder();
     }
+
+    public int getTerm() {
+      return term;
+    }
+
+    public void setTerm(int term) {
+      this.term = term;
+    }
   }
 
   static class Builder {
@@ -311,6 +335,7 @@ public class Indexer implements Lifecycle {
     private int count;
     private long physicalOffset;
     private int size;
+    private int term;
     private Chunk chunk;
 
     public Builder setTopicId(int topicId) {
@@ -353,6 +378,15 @@ public class Indexer implements Lifecycle {
       return this;
     }
 
+    public int getTerm() {
+      return term;
+    }
+
+    public Builder setTerm(int term) {
+      this.term = term;
+      return this;
+    }
+
     public BatchIndex build() {
       BatchIndex batchIndex = new BatchIndex();
       batchIndex.topicId = topicId;
@@ -363,6 +397,7 @@ public class Indexer implements Lifecycle {
       batchIndex.physicalOffset = physicalOffset;
       batchIndex.size = size;
       batchIndex.chunk = chunk;
+      batchIndex.term = term;
       return batchIndex;
     }
   }

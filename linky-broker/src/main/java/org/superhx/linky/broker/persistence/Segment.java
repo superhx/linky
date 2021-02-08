@@ -30,26 +30,13 @@ public interface Segment extends Lifecycle {
   int NO_INDEX = -1;
   long NO_OFFSET = -1L;
 
-  CompletableFuture<AppendResult> append(BatchRecord batchRecord);
+  CompletableFuture<AppendResult> append(AppendContext ctx, BatchRecord batchRecord);
 
   CompletableFuture<BatchRecord> get(long offset);
 
   default void replicate(
       SegmentServiceProto.ReplicateRequest request,
       StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
-    throw new UnsupportedOperationException();
-  }
-
-  default void syncCmd(
-      SegmentServiceProto.SyncCmdRequest request,
-      StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
-    throw new UnsupportedOperationException();
-  }
-
-  // TODO: remove sync, keep segment main & follower even after sealed
-  default void sync(
-      SegmentServiceProto.SyncRequest request,
-      StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
     throw new UnsupportedOperationException();
   }
 
@@ -71,6 +58,7 @@ public interface Segment extends Lifecycle {
 
   /**
    * reclaim space before exclusive offset
+   *
    * @param offset
    */
   CompletableFuture<Void> reclaimSpace(long offset);
@@ -78,6 +66,8 @@ public interface Segment extends Lifecycle {
   SegmentMeta getMeta();
 
   CompletableFuture<Void> seal();
+
+  void updateMeta(SegmentMeta meta);
 
   default Status getStatus() {
     return Status.WRITABLE;
@@ -87,7 +77,8 @@ public interface Segment extends Lifecycle {
     enum Status {
       SUCCESS,
       REPLICA_LOSS,
-      REPLICA_BREAK
+      REPLICA_BREAK,
+      TERM_EXPIRED
     }
 
     private Status status = Status.SUCCESS;
@@ -111,11 +102,21 @@ public interface Segment extends Lifecycle {
     }
   }
 
+  class AppendContext {
+    private int term;
+
+    public int getTerm() {
+      return term;
+    }
+
+    public void setTerm(int term) {
+      this.term = term;
+    }
+  }
+
   enum Status {
     WRITABLE,
     REPLICA_LOSS,
-    READONLY,
-    FULL,
     REPLICA_BREAK
   }
 }

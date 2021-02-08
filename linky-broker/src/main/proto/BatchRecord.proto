@@ -16,6 +16,7 @@ message BatchRecord {
     int64 firstOffset = 4;
     int64 storeTimestamp = 5;
     repeated Record records = 6;
+    int32 term = 7;
 }
 
 message Record {

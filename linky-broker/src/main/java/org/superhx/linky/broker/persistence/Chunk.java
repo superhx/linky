@@ -33,11 +33,8 @@ public interface Chunk extends Lifecycle {
 
   long getConfirmOffset();
 
-  void setReclaimOffset(long offset);
-  //
-  //  long getReclaimOffset();
-  //
-  //  Iterator<Index> indexIterator(long startOffset, long endOffset);
+  int getTerm();
+
 
   class AppendResult {
     private long offset;

@@ -37,19 +37,19 @@ public class DistributedSegment implements Segment {
   private Segment localSegment;
 
   public DistributedSegment(SegmentMeta meta, Segment localSegment, DataNodeCnx dataNodeCnx) {
-    this.meta = meta.toBuilder();
+    updateMeta(meta);
     this.dataNodeCnx = dataNodeCnx;
-    this.address = meta.getReplicas(0).getAddress();
     this.localSegment = localSegment;
     log.info("open distributed segment {}", meta);
   }
 
   @Override
-  public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
+  public CompletableFuture<AppendResult> append(AppendContext ctx, BatchRecord batchRecord) {
+    ctx.setTerm(0);
     if (localSegment == null) {
       throw new UnsupportedOperationException();
     }
-    return localSegment.append(batchRecord);
+    return localSegment.append(ctx, batchRecord);
   }
 
   @Override
@@ -168,5 +168,11 @@ public class DistributedSegment implements Segment {
                 .setIndex(meta.getIndex())
                 .build())
         .thenAccept(o -> meta.setEndOffset(o));
+  }
+
+  @Override
+  public void updateMeta(SegmentMeta meta) {
+    this.meta = meta.toBuilder();
+    this.address = meta.getReplicas(0).getAddress();
   }
 }

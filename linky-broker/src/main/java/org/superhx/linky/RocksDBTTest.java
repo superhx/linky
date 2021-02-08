@@ -36,18 +36,22 @@ public class RocksDBTTest {
     final List<ColumnFamilyHandle> columnFamilyHandleList = new ArrayList<>();
     RocksDB db =
         RocksDB.open(options, "/Users/wumu.hx/linky", cfDescriptors, columnFamilyHandleList);
-    WriteBatch writeBatch = new WriteBatch();
-    writeBatch.put(
-        "hello11".getBytes(Utils.DEFAULT_CHARSET), "world11".getBytes(Utils.DEFAULT_CHARSET));
-    writeBatch.put(
-            "hello21".getBytes(Utils.DEFAULT_CHARSET), "world21".getBytes(Utils.DEFAULT_CHARSET));
-    writeBatch.put(
-            "hello12".getBytes(Utils.DEFAULT_CHARSET), "world12".getBytes(Utils.DEFAULT_CHARSET));
-    writeBatch.put(
-            "hello18".getBytes(Utils.DEFAULT_CHARSET), "world18".getBytes(Utils.DEFAULT_CHARSET));
-    writeBatch.put(
-            "hello19".getBytes(Utils.DEFAULT_CHARSET), "world19".getBytes(Utils.DEFAULT_CHARSET));
-    db.write(new WriteOptions(), writeBatch);
+    //    WriteBatch writeBatch = new WriteBatch();
+    //    writeBatch.put(
+    //        "hello11".getBytes(Utils.DEFAULT_CHARSET), "world11".getBytes(Utils.DEFAULT_CHARSET));
+    //    writeBatch.put(
+    //            "hello21".getBytes(Utils.DEFAULT_CHARSET),
+    // "world21".getBytes(Utils.DEFAULT_CHARSET));
+    //    writeBatch.put(
+    //            "hello12".getBytes(Utils.DEFAULT_CHARSET),
+    // "world12".getBytes(Utils.DEFAULT_CHARSET));
+    //    writeBatch.put(
+    //            "hello18".getBytes(Utils.DEFAULT_CHARSET),
+    // "world18".getBytes(Utils.DEFAULT_CHARSET));
+    //    writeBatch.put(
+    //            "hello19".getBytes(Utils.DEFAULT_CHARSET),
+    // "world19".getBytes(Utils.DEFAULT_CHARSET));
+    //    db.write(new WriteOptions(), writeBatch);
     //    db.put("hello".getBytes(Utils.DEFAULT_CHARSET), "world1".getBytes(Utils.DEFAULT_CHARSET));
     db.put(
         columnFamilyHandleList.get(1),
@@ -58,8 +62,12 @@ public class RocksDBTTest {
     //        new String(db.get(columnFamilyHandleList.get(1),
     // "hello".getBytes(Utils.DEFAULT_CHARSET))));
 
-    RocksIterator it =  db.newIterator();
-    it.seekForPrev("hello19".getBytes(Utils.DEFAULT_CHARSET));
-    System.out.println(new String( it.value()));
+    RocksIterator it = db.newIterator(columnFamilyHandleList.get(1));
+    for (; it.isValid(); it.next()) {
+      System.out.println(new String(it.key()));
+    }
+    it.close();
+    //    it.seekForPrev("hello19".getBytes(Utils.DEFAULT_CHARSET));
+    //    System.out.println(new String( it.value()));
   }
 }

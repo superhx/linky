@@ -165,6 +165,56 @@ public class ControlNodeCnx implements Lifecycle {
     return future;
   }
 
+  public CompletableFuture<SegmentServiceProto.StatusResponse> getSegmentStatus(
+      String address, SegmentMeta meta) {
+    CompletableFuture<SegmentServiceProto.StatusResponse> future = new CompletableFuture<>();
+    getSegmentServiceStub(address)
+        .status(
+            SegmentServiceProto.StatusRequest.newBuilder()
+                .setTopicId(meta.getTopicId())
+                .setPartition(meta.getPartition())
+                .setIndex(meta.getIndex())
+                .build(),
+            new StreamObserver<SegmentServiceProto.StatusResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.StatusResponse statusResponse) {
+                future.complete(statusResponse);
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return future;
+  }
+
+  public CompletableFuture<SegmentServiceProto.UpdateResponse> updateSegmentMeta(
+      String address, SegmentMeta meta) {
+    CompletableFuture<SegmentServiceProto.UpdateResponse> future = new CompletableFuture<>();
+    getSegmentServiceStub(address)
+        .update(
+            SegmentServiceProto.UpdateRequest.newBuilder().setMeta(meta).build(),
+            new StreamObserver<SegmentServiceProto.UpdateResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.UpdateResponse updateResponse) {
+                future.complete(updateResponse);
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return future;
+  }
+
   public PartitionServiceGrpc.PartitionServiceStub getPartitionServiceStub(String address) {
     Channel channel = getChannel(address);
     return PartitionServiceGrpc.newStub(channel);

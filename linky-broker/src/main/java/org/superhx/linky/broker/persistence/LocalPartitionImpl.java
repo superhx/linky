@@ -56,9 +56,10 @@ public class LocalPartitionImpl implements Partition {
               switch (s.getStatus()) {
                 case WRITABLE:
                 case REPLICA_LOSS:
-                  return s.append(batchRecord);
+                  return s.append(new Segment.AppendContext(), batchRecord);
                 case REPLICA_BREAK:
-                  return nextSegment(s).thenCompose(n -> n.append(batchRecord));
+                  return nextSegment(s)
+                      .thenCompose(n -> n.append(new Segment.AppendContext(), batchRecord));
               }
               throw new LinkyIOException(String.format("Unknown status %s", s.getStatus()));
             })

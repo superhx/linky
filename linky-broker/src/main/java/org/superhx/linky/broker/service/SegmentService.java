@@ -21,6 +21,7 @@ import org.superhx.linky.broker.persistence.LocalSegmentManager;
 import org.superhx.linky.broker.persistence.Segment;
 import org.superhx.linky.data.service.proto.SegmentServiceGrpc;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
+import org.superhx.linky.service.proto.SegmentMeta;
 
 public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
 
@@ -117,36 +118,44 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
   }
 
   @Override
-  public void syncCmd(
-      SegmentServiceProto.SyncCmdRequest request,
-      StreamObserver<SegmentServiceProto.SyncCmdResponse> responseObserver) {
-    Segment segment =
-        this.localSegmentManager.getSegment(
-            request.getTopicId(), request.getPartition(), request.getIndex());
-    segment.syncCmd(request, responseObserver);
-  }
-
-  @Override
-  public void sync(
-      SegmentServiceProto.SyncRequest request,
-      StreamObserver<SegmentServiceProto.SyncResponse> responseObserver) {
-    Segment segment =
-        this.localSegmentManager.getSegment(
-            request.getTopicId(), request.getPartition(), request.getIndex());
-    segment.sync(request, responseObserver);
-  }
-
-  @Override
   public void reclaim(
       SegmentServiceProto.ReclaimRequest request,
       StreamObserver<SegmentServiceProto.ReclaimResponse> responseObserver) {
     Segment segment =
-            this.localSegmentManager.getSegment(
-                    request.getTopicId(), request.getPartition(), request.getIndex());
-    segment.reclaimSpace(request.getOffset()).thenAccept(nil -> {
-      responseObserver.onNext(SegmentServiceProto.ReclaimResponse.newBuilder().build());
-      responseObserver.onCompleted();
-    });
+        this.localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    segment
+        .reclaimSpace(request.getOffset())
+        .thenAccept(
+            nil -> {
+              responseObserver.onNext(SegmentServiceProto.ReclaimResponse.newBuilder().build());
+              responseObserver.onCompleted();
+            });
+  }
+
+  @Override
+  public void status(
+      SegmentServiceProto.StatusRequest request,
+      StreamObserver<SegmentServiceProto.StatusResponse> responseObserver) {
+    Segment segment =
+        localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    responseObserver.onNext(
+        SegmentServiceProto.StatusResponse.newBuilder().setMeta(segment.getMeta()).build());
+    responseObserver.onCompleted();
+  }
+
+  @Override
+  public void update(
+      SegmentServiceProto.UpdateRequest request,
+      StreamObserver<SegmentServiceProto.UpdateResponse> responseObserver) {
+    SegmentMeta meta = request.getMeta();
+    Segment segment =
+        this.localSegmentManager.getSegment(
+            meta.getTopicId(), meta.getPartition(), meta.getIndex());
+    segment.updateMeta(meta);
+    responseObserver.onNext(SegmentServiceProto.UpdateResponse.newBuilder().build());
+    responseObserver.onCompleted();
   }
 
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {

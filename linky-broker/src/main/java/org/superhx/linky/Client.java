@@ -86,7 +86,7 @@ public class Client {
         String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
     AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 1; i++) {
       CountDownLatch getLatch = new CountDownLatch(1);
       stub.get(
           GetRequest.newBuilder()

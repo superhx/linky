@@ -57,7 +57,7 @@ public class ChunkManager implements Lifecycle {
 
     int chunkIdMax = 0;
     try (RocksIterator it = persistentMeta.chunkMetaIterator()) {
-      for (; it.isValid(); it.next()) {
+      for (it.seekToFirst(); it.isValid(); it.next()) {
         int chunkId = ByteBuffer.wrap(it.key()).getInt();
         chunkIdMax = Math.max(chunkIdMax, chunkId);
         try {

@@ -27,12 +27,13 @@ import java.util.concurrent.CompletableFuture;
 
 public class LocalChunk implements Chunk {
   private static final Logger log = LoggerFactory.getLogger(LocalChunk.class);
-  private long reclaimOffset;
+  private ChunkMeta meta;
   private Journal journal;
   private Indexer indexer;
   private long startOffset;
 
   public LocalChunk(ChunkMeta meta) {
+    this.meta = meta;
     this.startOffset = meta.getStartOffset();
   }
 
@@ -47,7 +48,7 @@ public class LocalChunk implements Chunk {
 
   @Override
   public int chunkId() {
-    return 0;
+    return meta.getChunkId();
   }
 
   @Override
@@ -100,13 +101,18 @@ public class LocalChunk implements Chunk {
     if (batchIndex == null) {
       return 0;
     }
-    return batchIndex.getOffset() + batchIndex.getCount() - 1;
+    return batchIndex.getOffset() + batchIndex.getCount();
   }
 
   @Override
-  public void setReclaimOffset(long offset) {
-    this.reclaimOffset = offset;
+  public int getTerm() {
+    Indexer.BatchIndex batchIndex = indexer.getLastIndex(this);
+    if (batchIndex == null) {
+      return 0;
+    }
+    return batchIndex.getTerm();
   }
+
   //
   //  @Override
   //  public long getReclaimOffset() {

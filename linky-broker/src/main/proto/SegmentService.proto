@@ -19,11 +19,11 @@ service SegmentService {
 
     rpc seal(SealRequest) returns (SealResponse) {}
 
-    rpc syncCmd(SyncCmdRequest) returns (SyncCmdResponse) {}
-
-    rpc sync(SyncRequest) returns (stream SyncResponse) {}
-
     rpc reclaim(ReclaimRequest) returns (ReclaimResponse) {}
+
+    rpc status(StatusRequest) returns (StatusResponse) {}
+
+    rpc update(UpdateRequest) returns (UpdateResponse) {}
 }
 
 message GetRecordRequest {
@@ -44,6 +44,7 @@ message GetRecordResponse {
 
 message ReplicateRequest {
     BatchRecord batchRecord = 1;
+    int64 commitOffset = 2;
 }
 
 message ReplicateResponse {
@@ -51,6 +52,7 @@ message ReplicateResponse {
         SUCCESS = 0;
         FAIL = 1;
         RESET = 2;
+        EXPIRED = 3;
     }
     Status status = 1;
     int64 confirmOffset = 2;
@@ -76,27 +78,6 @@ message SealResponse {
     int64 endOffset = 1;
 }
 
-message SyncCmdRequest {
-    int32 topicId = 1;
-    int32 partition = 2;
-    int32 index = 3;
-    string address = 4;
-}
-
-message SyncCmdResponse {
-}
-
-message SyncRequest {
-    int32 topicId = 1;
-    int32 partition = 2;
-    int32 index = 3;
-    int64 startOffset = 4;
-}
-
-message SyncResponse {
-    BatchRecord batchRecord = 1;
-}
-
 message ReclaimRequest {
     int32 topicId = 1;
     int32 partition = 2;
@@ -106,4 +87,21 @@ message ReclaimRequest {
 
 message ReclaimResponse {
 
+}
+
+message StatusRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+}
+
+message StatusResponse {
+    SegmentMeta meta = 1;
+}
+
+message UpdateRequest {
+    SegmentMeta meta = 1;
+}
+
+message UpdateResponse {
 }

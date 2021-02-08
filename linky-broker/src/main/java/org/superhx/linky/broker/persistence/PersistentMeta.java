@@ -87,7 +87,7 @@ public class PersistentMeta {
     key.putInt(segmentMeta.getIndex());
     byte[] value = segmentMeta.toByteArray();
     try {
-      rocksDB.put(segmentMetaCFH, key.array(), value);
+      rocksDB.put(segmentMetaCFH, new WriteOptions().setSync(true), key.array(), value);
     } catch (RocksDBException e) {
       throw new LinkyIOException(e);
     }

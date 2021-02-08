@@ -35,7 +35,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static org.superhx.linky.broker.persistence.Segment.*;
+import static org.superhx.linky.broker.persistence.Segment.FOLLOWER_MARK;
+import static org.superhx.linky.broker.persistence.Segment.NO_OFFSET;
 
 public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManagerServiceImplBase
     implements SegmentRegistry, Lifecycle, LinkyElection.LeaderChangeListener {
@@ -44,7 +45,6 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   private Map<SegmentKey, SegmentMeta.Builder> segments = null;
   private Map<SegmentKey, Map<String, Timestamped<SegmentMeta>>> aliveSegments =
       new ConcurrentHashMap<>();
-  private Set<SegmentReplicaKey> syncing = new CopyOnWriteArraySet<>();
 
   private ControlNodeCnx controlNodeCnx;
   private NodeRegistry nodeRegistry;
@@ -69,120 +69,145 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
     if (!election.isLeader()) {
       return;
     }
+
+    List<NodeMeta> nodeMetas = nodeRegistry.getAliveNodes();
     Map<SegmentKey, SegmentMeta.Builder> segments = this.segments;
     for (Map.Entry<SegmentKey, SegmentMeta.Builder> entry : segments.entrySet()) {
-      SegmentMeta meta = getAliveSegmentMeta(entry.getValue());
-      if ((meta.getFlag() & SEAL_MARK) == 0) {
-        continue;
-      }
-      SegmentMeta.Replica intactReplica = null;
-      for (SegmentMeta.Replica replica : meta.getReplicasList()) {
-        if (replica.getReplicaOffset() >= meta.getEndOffset()) {
-          intactReplica = replica;
+      SegmentMeta.Builder metaBuilder = entry.getValue();
+      int topicId = entry.getKey().getTopicId();
+
+      // ensure replica num
+      Map<String, SegmentMeta> onlineSegment =
+          getOnlineSegmentMeta(metaBuilder, TimeUnit.MINUTES.toMillis(1));
+      Set<String> replicas = onlineSegment.keySet();
+      for (int i = replicas.size();
+          i < partitionRegistry.getTopicMeta(topicId).getReplicaNum();
+          i++) {
+        for (NodeMeta nodeMeta : nodeMetas) {
+          if (replicas.contains(nodeMeta.getAddress())) {
+            continue;
+          }
+
+          SegmentMeta.Builder replicaSegment = entry.getValue().clone().clearReplicas();
+
+          replicaSegment.addReplicas(
+              SegmentMeta.Replica.newBuilder()
+                  .setAddress(nodeMeta.getAddress())
+                  .setFlag(FOLLOWER_MARK)
+                  .build());
+          replicas.add(nodeMeta.getAddress());
+          log.info("[REPLICA_LOSS] {}", replicaSegment);
+          controlNodeCnx
+              .createSegment(replicaSegment.build())
+              .thenAccept(nil -> register(nodeMeta, replicaSegment.build()));
           break;
         }
       }
-      if (intactReplica != null) {
+
+      // keep replica in sync
+      onlineSegment = getOnlineSegmentMeta(metaBuilder, KEEPALIVE);
+      if (onlineSegment.size() == 0) {
+        continue;
+      }
+
+      String mainAddress = null;
+      SegmentMeta main = null;
+      Set<String> followers = Collections.emptySet();
+      for (Map.Entry<String, SegmentMeta> e : onlineSegment.entrySet()) {
+        String addr = e.getKey();
+        SegmentMeta meta = e.getValue();
         for (SegmentMeta.Replica replica : meta.getReplicasList()) {
-          SegmentReplicaKey segmentReplicaKey =
-              new SegmentReplicaKey(
-                  meta.getTopicId(), meta.getPartition(), meta.getIndex(), replica.getAddress());
-          if (syncing.contains(segmentReplicaKey)) {
-            continue;
-          }
-          if (replica.getReplicaOffset() >= meta.getEndOffset()) {
-            continue;
-          }
-          syncing.add(segmentReplicaKey);
-          String catchup =
-              String.format(
-                  "[REPLICA_CATCHUP] %s from %s, meta %s",
-                  replica.getAddress(), intactReplica.getAddress(), meta);
-          log.info("{} start", catchup);
-          long timestamp = System.currentTimeMillis();
-          controlNodeCnx
-              .getSegmentServiceStub(replica.getAddress())
-              .syncCmd(
-                  SegmentServiceProto.SyncCmdRequest.newBuilder()
-                      .setAddress(intactReplica.getAddress())
-                      .setTopicId(meta.getTopicId())
-                      .setPartition(meta.getPartition())
-                      .setIndex(meta.getIndex())
-                      .build(),
-                  new StreamObserver<SegmentServiceProto.SyncCmdResponse>() {
-                    @Override
-                    public void onNext(SegmentServiceProto.SyncCmdResponse syncCmdResponse) {
-                      log.info("{} cost {} ms", catchup, System.currentTimeMillis() - timestamp);
-                    }
-
-                    @Override
-                    public void onError(Throwable throwable) {
-                      log.info("{} fail", catchup, throwable);
-                      syncing.remove(segmentReplicaKey);
-                    }
-
-                    @Override
-                    public void onCompleted() {
-                      syncing.remove(segmentReplicaKey);
-                    }
-                  });
-        }
-
-        SegmentMeta onlineSegment = getOnlineSegmentMeta(entry.getValue());
-        List<NodeMeta> nodeMetas = nodeRegistry.getAliveNodes();
-        Set<String> replicas =
-            onlineSegment.getReplicasList().stream()
-                .map(r -> r.getAddress())
-                .collect(Collectors.toSet());
-        SegmentMeta.Builder replicaSegment = onlineSegment.toBuilder().clearReplicas();
-        for (int i = onlineSegment.getReplicasCount();
-            i < partitionRegistry.getTopicMeta(meta.getTopicId()).getReplicaNum();
-            i++) {
-          for (NodeMeta nodeMeta : nodeMetas) {
-            if (replicas.contains(nodeMeta.getAddress())) {
+          if ((replica.getFlag() & FOLLOWER_MARK) == 0 && e.getKey().equals(replica.getAddress())) {
+            if (main != null && main.getTerm() > meta.getTerm()) {
               continue;
             }
-            replicaSegment.addReplicas(
-                SegmentMeta.Replica.newBuilder()
-                    .setAddress(nodeMeta.getAddress())
-                    .setFlag(FOLLOWER_MARK)
-                    .build());
-            replicas.add(nodeMeta.getAddress());
-          }
-          if (replicaSegment.getReplicasList().size() != 0) {
-            log.info("[REPLICA_LOSS] {}", replicaSegment);
-            controlNodeCnx
-                .createSegment(replicaSegment.build())
-                .thenAccept(
-                    nil -> {
-                      register(replicaSegment.build());
-                    });
+            mainAddress = addr;
+            main = meta;
+            followers =
+                meta.getReplicasList().stream()
+                    .map(r -> r.getAddress())
+                    .filter(a -> !a.equals(addr))
+                    .collect(Collectors.toSet());
           }
         }
-      } else {
-        log.warn("cannot find intactReplica for {}", meta);
+      }
+
+      if (main == null) {
+        Map<String, SegmentMeta> segmentStatus = new ConcurrentHashMap<>();
+        try {
+          CompletableFuture.allOf(
+                  onlineSegment.keySet().stream()
+                      .map(
+                          a ->
+                              controlNodeCnx
+                                  .getSegmentStatus(a, metaBuilder.build())
+                                  .thenApply(s -> segmentStatus.put(a, s.getMeta())))
+                      .collect(Collectors.toList())
+                      .toArray(new CompletableFuture[0]))
+              .get();
+          for (Map.Entry<String, SegmentMeta> e : segmentStatus.entrySet()) {
+            String addr = e.getKey();
+            SegmentMeta status = e.getValue();
+            if ((main == null)
+                || (status.getTerm() > main.getTerm())
+                || getOffset(addr, status) > getOffset(mainAddress, main)) {
+              mainAddress = e.getKey();
+              main = e.getValue();
+            }
+          }
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+      }
+
+      List<String> moreFollowers = new LinkedList<>();
+      for (Map.Entry<String, SegmentMeta> e : onlineSegment.entrySet()) {
+        String addr = e.getKey();
+        if (followers.contains(addr)) {
+          continue;
+        }
+        moreFollowers.add(addr);
+      }
+
+      if (moreFollowers.size() != 0) {
+        SegmentMeta newMeta =
+            main.toBuilder()
+                .addAllReplicas(
+                    moreFollowers.stream()
+                        .map(
+                            f ->
+                                SegmentMeta.Replica.newBuilder()
+                                    .setAddress(f)
+                                    .setFlag(FOLLOWER_MARK)
+                                    .build())
+                        .collect(Collectors.toList()))
+                .build();
+        log.info("[REPLICA_SYNC]{},{},{}", mainAddress, main, newMeta);
+        controlNodeCnx.updateSegmentMeta(mainAddress, newMeta);
       }
     }
   }
 
-  private SegmentMeta getAliveSegmentMeta(SegmentMeta.Builder meta) {
-    return getAliveSegmentMeta0(meta, KEEPALIVE);
+  private static long getOffset(String address, SegmentMeta meta) {
+    return meta.getReplicasList().stream()
+        .filter(r -> r.getAddress().equals(address))
+        .map(r -> r.getReplicaOffset())
+        .findAny()
+        .orElse(0L);
   }
 
-  private SegmentMeta getOnlineSegmentMeta(SegmentMeta.Builder meta) {
-    return getAliveSegmentMeta0(meta, TimeUnit.MINUTES.toMillis(1));
-  }
-
-  private SegmentMeta getAliveSegmentMeta0(SegmentMeta.Builder meta, long timeout) {
+  private Map<String, SegmentMeta> getOnlineSegmentMeta(
+      SegmentMeta.Builder meta, long expiredMills) {
     SegmentKey key = new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
     Map<String, Timestamped<SegmentMeta>> map = aliveSegments.get(key);
-    SegmentMeta.Builder aliveMeta = meta.clone().clearReplicas();
-    if (map != null) {
-      map.values().stream()
-          .filter(t -> t.getTimestamp() + timeout > System.currentTimeMillis())
-          .forEach(t -> aliveMeta.addReplicas(t.getData().getReplicas(0)));
-    }
-    return aliveMeta.build();
+    Map<String, SegmentMeta> onlineSegment = new HashMap<>();
+    map.forEach(
+        (addr, seg) -> {
+          if (seg.getTimestamp() + expiredMills < System.currentTimeMillis()) {
+            onlineSegment.put(addr, seg.getData());
+          }
+        });
+    return onlineSegment;
   }
 
   private Map<SegmentKey, SegmentMeta.Builder> loadSegments() {
@@ -213,20 +238,16 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
   }
 
   @Override
-  public void register(SegmentMeta segment) {
+  public void register(NodeMeta nodeMeta, SegmentMeta segment) {
     checkLeadership();
     SegmentKey key =
         new SegmentKey(segment.getTopicId(), segment.getPartition(), segment.getIndex());
-    for (SegmentMeta.Replica replica : segment.getReplicasList()) {
-      Map<String, Timestamped<SegmentMeta>> map = aliveSegments.get(key);
-      if (map == null) {
-        aliveSegments.putIfAbsent(key, new ConcurrentHashMap<>());
-        map = aliveSegments.get(key);
-      }
-      map.put(
-          replica.getAddress(),
-          new Timestamped<>(segment.toBuilder().clearReplicas().addReplicas(replica).build()));
+    Map<String, Timestamped<SegmentMeta>> map = aliveSegments.get(key);
+    if (map == null) {
+      aliveSegments.putIfAbsent(key, new ConcurrentHashMap<>());
+      map = aliveSegments.get(key);
     }
+    map.put(nodeMeta.getAddress(), new Timestamped<>(segment));
   }
 
   @Override
@@ -396,11 +417,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                   request.getPartition(),
                   request.getIndex(),
                   endOffset);
-              kvStore.put(
-                  String.format(
-                      "segments/%s/%s/%s",
-                      request.getTopicId(), request.getPartition(), request.getIndex()),
-                  Utils.pb2jsonBytes(meta.clone()));
+              saveSegmentMeta(meta);
               responseObserver.onNext(
                   SegmentManagerServiceProto.SealResponse.newBuilder()
                       .setEndOffset(endOffset)
@@ -413,6 +430,12 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
               responseObserver.onError(t);
               return null;
             });
+  }
+
+  private void saveSegmentMeta(SegmentMeta.Builder meta) {
+    kvStore.put(
+        String.format("segments/%s/%s/%s", meta.getTopicId(), meta.getPartition(), meta.getIndex()),
+        Utils.pb2jsonBytes(meta.clone()));
   }
 
   public void setControlNodeCnx(ControlNodeCnx controlNodeCnx) {
