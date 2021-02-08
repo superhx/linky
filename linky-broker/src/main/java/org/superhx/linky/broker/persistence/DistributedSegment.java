@@ -167,7 +167,16 @@ public class DistributedSegment implements Segment {
                 .setPartition(meta.getPartition())
                 .setIndex(meta.getIndex())
                 .build())
-        .thenAccept(o -> meta.setEndOffset(o));
+        .thenAccept(
+            o -> {
+              meta.setFlag(meta.getFlag() & SEAL_MARK);
+              meta.setEndOffset(o);
+            });
+  }
+
+  @Override
+  public boolean isSealed() {
+    return (meta.getFlag() & SEAL_MARK) != 0;
   }
 
   @Override

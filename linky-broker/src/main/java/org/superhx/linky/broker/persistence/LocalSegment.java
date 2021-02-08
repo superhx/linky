@@ -100,9 +100,6 @@ public class LocalSegment implements Segment {
     }
     lastChunk = this.chunks.lastEntry().getValue();
 
-    this.confirmOffset = lastChunk.getConfirmOffset();
-    this.nextOffset.set(confirmOffset);
-
     updateMeta(meta);
     followerScanner =
         scheduler.scheduleWithFixedDelay(() -> checkFollowers(), 30, 30, TimeUnit.SECONDS);
@@ -126,7 +123,7 @@ public class LocalSegment implements Segment {
       break;
     }
     if (role == Role.FOLLOWER) {
-        this.meta.clearReplicas();
+      this.meta.clearReplicas();
     }
     Context.current().fork().run(() -> checkFollowers());
   }
@@ -136,6 +133,9 @@ public class LocalSegment implements Segment {
     for (Chunk chunk : chunks.values()) {
       chunk.init();
     }
+    confirmOffset = lastChunk.getConfirmOffset();
+    nextOffset.set(confirmOffset);
+    log.info("[SEGMENT_INIT]{},commitOffset={}", segmentId, confirmOffset);
   }
 
   @Override
@@ -346,6 +346,11 @@ public class LocalSegment implements Segment {
                       this.brokerContext.getStorePath(), topicId, partition, index));
               log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
             });
+  }
+
+  @Override
+  public boolean isSealed() {
+    return (meta.getFlag() & SEAL_MARK) != 0;
   }
 
   protected void checkFollowers() {

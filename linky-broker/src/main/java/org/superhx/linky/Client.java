@@ -86,7 +86,11 @@ public class Client {
         String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
     AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
-    for (int i = 0; i < 1; i++) {
+    final boolean[] end = {false};
+    for (int i = 0; i < 100; i++) {
+      if (end[0]) {
+        break;
+      }
       CountDownLatch getLatch = new CountDownLatch(1);
       stub.get(
           GetRequest.newBuilder()
@@ -97,18 +101,22 @@ public class Client {
           new StreamObserver<GetResponse>() {
             @Override
             public void onNext(GetResponse getResponse) {
+              if (getResponse.getStatus() == GetResponse.Status.NO_NEW_MSG) {
+                end[0] = true;
+                return;
+              }
               ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
               System.out.println(
                   "Get return offset:"
                       + getResponse.getBatchRecord().getFirstOffset()
                       + " count:"
                       + getResponse.getBatchRecord().getRecordsCount()
-                      + " record:"
-                      + getResponse.getBatchRecord()
                       + " next: seg "
                       + buf.getInt()
                       + " segOffset "
-                      + buf.getLong());
+                      + buf.getLong()
+                      + " body"
+                      + getResponse.getBatchRecord());
               cursor.set(buf.array());
             }
 

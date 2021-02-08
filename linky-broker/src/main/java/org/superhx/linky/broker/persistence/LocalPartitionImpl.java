@@ -138,17 +138,15 @@ public class LocalPartitionImpl implements Partition {
 
     GetResult getResult = new GetResult();
     CompletableFuture<BatchRecord> recordFuture;
-    Segment segment = this.lastSegment;
-    if (segment != null && segment.getIndex() != segmentIndex) {
-      for (Segment seg : segments) {
-        if (seg.getIndex() == segmentIndex) {
-          if (seg.getEndOffset() != Segment.NO_OFFSET && seg.getEndOffset() <= offset) {
-            segmentIndex++;
-            offset = 0;
-            continue;
-          }
-          segment = seg;
+    Segment segment = null;
+    for (Segment seg : segments) {
+      if (seg.getIndex() == segmentIndex) {
+        if (seg.isSealed() && seg.getEndOffset() <= offset) {
+          segmentIndex++;
+          offset = 0;
+          continue;
         }
+        segment = seg;
       }
     }
     if (segment != null) {
@@ -163,11 +161,12 @@ public class LocalPartitionImpl implements Partition {
         r -> {
           if (r == null) {
             getResult.setStatus(GetStatus.NO_NEW_MSG);
+            getResult.setNextCursor(cursor);
           } else {
             getResult.setBatchRecord(r);
             nextCursor.putLong(finalOffset + r.getRecordsCount());
+            getResult.setNextCursor(nextCursor.array());
           }
-          getResult.setNextCursor(nextCursor.array());
           return getResult;
         });
   }

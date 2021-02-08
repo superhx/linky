@@ -198,6 +198,12 @@ public class Indexer implements Lifecycle {
     if (!it.isValid()) {
       return null;
     }
+    byte[] key = it.key();
+    for (int i = 0; i < 4; i++) {
+      if (keyEndBound[i] != key[i]) {
+        return null;
+      }
+    }
     fillKey(batchIndex, it.key());
     fillValue(batchIndex, it.value());
     return batchIndex;

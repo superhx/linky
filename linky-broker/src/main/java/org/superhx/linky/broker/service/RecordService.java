@@ -88,12 +88,17 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
         .get(request.getCursor().toByteArray())
         .thenAccept(
             getResult -> {
-              GetResponse response =
+              GetResponse.Builder response =
                   GetResponse.newBuilder()
-                      .setBatchRecord(getResult.getBatchRecord())
-                      .setNextCursor(ByteString.copyFrom(getResult.getNextCursor()))
-                      .build();
-              responseObserver.onNext(response);
+                      .setNextCursor(ByteString.copyFrom(getResult.getNextCursor()));
+              switch (getResult.getStatus()) {
+                case SUCCESS:
+                  response.setBatchRecord(getResult.getBatchRecord());
+                  break;
+                case NO_NEW_MSG:
+                  response.setStatus(GetResponse.Status.NO_NEW_MSG);
+              }
+              responseObserver.onNext(response.build());
               responseObserver.onCompleted();
             })
         .exceptionally(

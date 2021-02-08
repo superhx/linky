@@ -183,6 +183,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                         .collect(Collectors.toList()))
                 .build();
         log.info("[REPLICA_SYNC]{},{},{}", mainAddress, main, newMeta);
+        saveSegmentMeta(newMeta);
         controlNodeCnx.updateSegmentMeta(mainAddress, newMeta);
       }
     }
@@ -417,7 +418,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
                   request.getPartition(),
                   request.getIndex(),
                   endOffset);
-              saveSegmentMeta(meta);
+              saveSegmentMeta(meta.build());
               responseObserver.onNext(
                   SegmentManagerServiceProto.SealResponse.newBuilder()
                       .setEndOffset(endOffset)
@@ -432,10 +433,10 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
             });
   }
 
-  private void saveSegmentMeta(SegmentMeta.Builder meta) {
+  private void saveSegmentMeta(SegmentMeta meta) {
     kvStore.put(
         String.format("segments/%s/%s/%s", meta.getTopicId(), meta.getPartition(), meta.getIndex()),
-        Utils.pb2jsonBytes(meta.clone()));
+        Utils.pb2jsonBytes(meta.toBuilder().clone()));
   }
 
   public void setControlNodeCnx(ControlNodeCnx controlNodeCnx) {

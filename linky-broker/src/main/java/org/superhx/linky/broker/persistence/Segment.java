@@ -67,6 +67,8 @@ public interface Segment extends Lifecycle {
 
   CompletableFuture<Void> seal();
 
+  boolean isSealed();
+
   void updateMeta(SegmentMeta meta);
 
   default Status getStatus() {
