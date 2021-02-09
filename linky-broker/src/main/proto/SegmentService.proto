@@ -53,6 +53,7 @@ message ReplicateResponse {
         FAIL = 1;
         RESET = 2;
         EXPIRED = 3;
+        NOT_FOUND = 4;
     }
     Status status = 1;
     int64 confirmOffset = 2;

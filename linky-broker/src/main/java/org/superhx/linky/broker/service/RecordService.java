@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.service;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.TextFormat;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,7 +130,10 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
         PartitionMeta old =
             partitions.get(partition.getTopic()).put(partition.getPartition(), partition);
         if (old == null || !Objects.equals(old.getAddress(), partition.getAddress()))
-          log.info("[PARTITION_CHANGE] old: {} new: {}", old, partition);
+          log.info(
+              "[PARTITION_CHANGE],old={},new={}",
+              TextFormat.shortDebugString(old),
+              TextFormat.shortDebugString(partition));
       }
     }
 

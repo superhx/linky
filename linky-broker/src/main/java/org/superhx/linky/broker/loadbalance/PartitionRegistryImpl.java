@@ -418,7 +418,6 @@ public class PartitionRegistryImpl
           @Override
           public void onError(Throwable throwable) {
             partitionWatchers.remove(responseObserver);
-            responseObserver.onCompleted();
           }
 
           @Override

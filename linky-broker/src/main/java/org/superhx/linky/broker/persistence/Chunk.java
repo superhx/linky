@@ -33,9 +33,6 @@ public interface Chunk extends Lifecycle {
 
   long getConfirmOffset();
 
-  int getTerm();
-
-
   class AppendResult {
     private long offset;
 

@@ -17,6 +17,7 @@
 package org.superhx.linky;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.TextFormat;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
@@ -36,7 +37,7 @@ public class Client {
 
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
-        ManagedChannelBuilder.forTarget("localhost:9591").usePlaintext().build();
+        ManagedChannelBuilder.forTarget("localhost:9592").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
     final AtomicLong maxOffset = new AtomicLong();
     long start = System.currentTimeMillis();
@@ -116,7 +117,7 @@ public class Client {
                       + " segOffset "
                       + buf.getLong()
                       + " body"
-                      + getResponse.getBatchRecord());
+                      + TextFormat.shortDebugString(getResponse.getBatchRecord()));
               cursor.set(buf.array());
             }
 

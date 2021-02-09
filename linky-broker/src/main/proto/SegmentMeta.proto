@@ -16,7 +16,6 @@ message SegmentMeta {
     int64 endOffset = 4;
     int32 flag = 5;
     int32 replicaNum = 6;
-    int32 term = 7;
     message Replica {
         int64 replicaOffset = 1;
         string address = 2;

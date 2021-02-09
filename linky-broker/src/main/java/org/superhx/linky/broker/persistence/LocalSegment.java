@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.TextFormat;
 import io.grpc.Context;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -34,12 +35,11 @@ import java.util.NavigableMap;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.REPLICA_BREAK;
-import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.TERM_EXPIRED;
+import static org.superhx.linky.broker.persistence.Segment.AppendResult.Status.SEALED;
 
 public class LocalSegment implements Segment {
   private static final Logger log = LoggerFactory.getLogger(LocalSegment.class);
@@ -48,7 +48,6 @@ public class LocalSegment implements Segment {
   private final int partition;
   private final int index;
   private final String segmentId;
-  private volatile AtomicInteger term = new AtomicInteger();
   private AtomicLong nextOffset = new AtomicLong();
   private Status status = Status.WRITABLE;
   private Role role;
@@ -107,14 +106,7 @@ public class LocalSegment implements Segment {
 
   @Override
   public void updateMeta(SegmentMeta meta) {
-    int currentTerm = term.get();
-    if (currentTerm > meta.getTerm()) {
-      log.warn("[SEGMENT_META_UPDATE_FAIL]{},{},{}", segmentId, this.meta, meta);
-      return;
-    }
     this.meta = meta.toBuilder();
-    term.compareAndSet(currentTerm, meta.getTerm());
-
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
       if (!brokerContext.getAddress().equals(replica.getAddress())) {
         continue;
@@ -166,11 +158,11 @@ public class LocalSegment implements Segment {
   public synchronized CompletableFuture<AppendResult> append(
       AppendContext ctx, BatchRecord batchRecord) {
     CompletableFuture<AppendResult> rst = new CompletableFuture<>();
-    if (ctx.getTerm() != term.get()) {
-      return CompletableFuture.completedFuture(new AppendResult(TERM_EXPIRED, NO_OFFSET));
-    }
     if (this.status == Status.REPLICA_BREAK) {
       return CompletableFuture.completedFuture(new AppendResult(REPLICA_BREAK, NO_OFFSET));
+    }
+    if (this.status == Status.SEALED) {
+      return CompletableFuture.completedFuture(new AppendResult(SEALED, NO_OFFSET));
     }
     try {
       int recordsCount = batchRecord.getRecordsCount();
@@ -223,19 +215,15 @@ public class LocalSegment implements Segment {
       StreamObserver<SegmentServiceProto.ReplicateResponse> responseObserver) {
     BatchRecord batchRecord = request.getBatchRecord();
     if (log.isDebugEnabled()) {
-      log.debug("{} receive replica {}", segmentId, batchRecord);
-    }
-    int currentTerm = term.get();
-    if (batchRecord.getTerm() < currentTerm) {
-      responseObserver.onNext(
-          SegmentServiceProto.ReplicateResponse.newBuilder()
-              .setStatus(SegmentServiceProto.ReplicateResponse.Status.EXPIRED)
-              .build());
-      return;
+      log.debug("[REPLICA_RECEIVE]{},{}", segmentId, TextFormat.shortDebugString(batchRecord));
     }
 
     if (nextOffset.get() != batchRecord.getFirstOffset()) {
-      log.info("{} main replicate need reset to {}", segmentId, nextOffset.get());
+      log.info(
+          "[REPLICA_RECEIVE_RESET]{},expectedOffset={},realOffset={}",
+          segmentId,
+          nextOffset.get(),
+          batchRecord.getFirstOffset());
       responseObserver.onNext(
           SegmentServiceProto.ReplicateResponse.newBuilder()
               .setStatus(SegmentServiceProto.ReplicateResponse.Status.RESET)
@@ -244,29 +232,6 @@ public class LocalSegment implements Segment {
               .build());
       return;
     }
-
-    if (batchRecord.getTerm() > currentTerm) {
-      log.info(
-          "{} update term {} and reset to {}", segmentId, batchRecord.getTerm(), nextOffset.get());
-      nextOffset.set(commitOffset);
-      confirmOffset = commitOffset;
-      responseObserver.onNext(
-          SegmentServiceProto.ReplicateResponse.newBuilder()
-              .setStatus(SegmentServiceProto.ReplicateResponse.Status.RESET)
-              .setWriteOffset(commitOffset)
-              .setConfirmOffset(commitOffset)
-              .build());
-      if (!term.compareAndSet(currentTerm, batchRecord.getTerm())) {
-        log.warn("{} expect term {} but {}", currentTerm, term.get());
-        responseObserver.onNext(
-            SegmentServiceProto.ReplicateResponse.newBuilder()
-                .setStatus(SegmentServiceProto.ReplicateResponse.Status.EXPIRED)
-                .build());
-        return;
-      }
-      return;
-    }
-
     commitOffset = request.getCommitOffset();
     long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
     getLastChunk()
@@ -317,22 +282,27 @@ public class LocalSegment implements Segment {
 
   @Override
   public SegmentMeta getMeta() {
-    SegmentMeta.Builder builder =
-        this.meta.clone().setEndOffset(endOffset).setTerm(term.get()).clearReplicas();
+    SegmentMeta.Builder builder = this.meta.clone().setEndOffset(endOffset).clearReplicas();
+    builder.addReplicas(
+        SegmentMeta.Replica.newBuilder()
+            .setAddress(brokerContext.getAddress())
+            .setFlag(role == Role.FOLLOWER ? FOLLOWER_MARK : 0)
+            .setReplicaOffset(confirmOffset)
+            .build());
     for (SegmentMeta.Replica replica : meta.getReplicasList()) {
       if (replica.getAddress().equals(brokerContext.getAddress())) {
-        builder.addReplicas(replica.toBuilder().setReplicaOffset(confirmOffset));
-      } else if (role == Role.MAIN) {
-        builder.addReplicas(replica.toBuilder().setReplicaOffset(commitOffset));
+        continue;
       }
+      builder.addReplicas(replica.toBuilder().setReplicaOffset(commitOffset));
     }
     return builder.build();
   }
 
   @Override
   public CompletableFuture<Void> seal() {
-    term.compareAndSet(0, 1);
-    log.info("start seal segment {}", meta);
+    this.status = Status.SEALED;
+    long startTimestamp = System.currentTimeMillis();
+    log.info("start seal local segment {}", TextFormat.shortDebugString(meta));
     return CompletableFuture.allOf(
             waitConfirmRequests.stream().map(w -> w.future).toArray(CompletableFuture[]::new))
         .thenAccept(
@@ -344,13 +314,16 @@ public class LocalSegment implements Segment {
                   Utils.pb2jsonBytes(this.meta),
                   Utils.getSegmentMetaPath(
                       this.brokerContext.getStorePath(), topicId, partition, index));
-              log.info("complete seal segment {} endOffset {}", meta, this.endOffset);
+              log.info(
+                  "complete seal segment {} cost {} ms",
+                  TextFormat.shortDebugString(meta),
+                  System.currentTimeMillis() - startTimestamp);
             });
   }
 
   @Override
   public boolean isSealed() {
-    return (meta.getFlag() & SEAL_MARK) != 0;
+    return this.status == Status.SEALED;
   }
 
   protected void checkFollowers() {
@@ -365,7 +338,7 @@ public class LocalSegment implements Segment {
       if (newFollowers.contains(follower.getAddress())) {
         continue;
       }
-      log.info("[SEGMENT_FOLLOWER_REMOVE]{},{}", segmentId, follower);
+      log.info("[SEGMENT_FOLLOWER_REMOVE]{},{}", segmentId, follower.getAddress());
       follower.shutdown();
       followers.remove(follower);
     }
@@ -377,7 +350,8 @@ public class LocalSegment implements Segment {
       }
     }
     for (Follower follower : followers) {
-      if (!follower.isBroken()) {
+      if (!follower.isBroken()
+          || (this.status == Status.SEALED && confirmOffset == follower.getConfirmOffset())) {
         continue;
       }
       followers.add(new Follower(follower.followerAddress));
@@ -457,7 +431,7 @@ public class LocalSegment implements Segment {
   }
 
   class Follower implements StreamObserver<SegmentServiceProto.ReplicateResponse>, Lifecycle {
-    private long expectedNextOffset = 0;
+    private long expectedNextOffset = NO_OFFSET;
     private long confirmOffset = NO_OFFSET;
     private long writeOffset = NO_OFFSET;
     private String followerAddress;
@@ -496,14 +470,30 @@ public class LocalSegment implements Segment {
       if (broken == true) {
         return;
       }
-      if (expectedNextOffset != request.getBatchRecord().getFirstOffset()) {
-        if (expectedNextOffset != NO_OFFSET) {
-          catchup();
+      if (expectedNextOffset == NO_OFFSET
+          && request.getBatchRecord().getFirstOffset() == NO_OFFSET) {
+        if (log.isDebugEnabled()) {
+          log.debug(
+              "[REPLICA_PROBE_SEND]{},{},{}",
+              segmentId,
+              followerAddress,
+              TextFormat.shortDebugString(request));
+          follower.onNext(request);
+          return;
         }
+      } else if (expectedNextOffset == NO_OFFSET) {
+        return;
+      }
+      if (expectedNextOffset != request.getBatchRecord().getFirstOffset()) {
+        catchup();
         return;
       }
       if (log.isDebugEnabled()) {
-        log.debug("send replica to {} {}", followerAddress, request);
+        log.debug(
+            "[REPLICA_SEND]{},{},{}",
+            segmentId,
+            followerAddress,
+            TextFormat.shortDebugString(request));
       }
       follower.onNext(request);
       expectedNextOffset += request.getBatchRecord().getRecordsCount();
@@ -552,14 +542,22 @@ public class LocalSegment implements Segment {
         confirmOffset = replicateResponse.getConfirmOffset();
         writeOffset = replicateResponse.getWriteOffset();
         checkWaiting();
+        return;
       }
       if (replicateResponse.getStatus() == SegmentServiceProto.ReplicateResponse.Status.RESET) {
         expectedNextOffset = replicateResponse.getConfirmOffset();
         log.info("[SEGMENT_REPLICATE_RESET]{},{}", segmentId, expectedNextOffset);
         catchup();
+        return;
       }
       if (replicateResponse.getStatus() == SegmentServiceProto.ReplicateResponse.Status.EXPIRED) {
-        log.info("[SEGMENT_REPLICATE_EXPIRED]{}", segmentId);
+        log.info("[SEGMENT_REPLICATE_EXPIRED]{},", segmentId, followerAddress);
+        return;
+      }
+      if (replicateResponse.getStatus() == SegmentServiceProto.ReplicateResponse.Status.NOT_FOUND) {
+        log.info("[SEGMENT_REPLICATE_NOT_FOUND]{},{}", segmentId, followerAddress);
+        broken = true;
+        return;
       }
     }
 
@@ -569,7 +567,7 @@ public class LocalSegment implements Segment {
         return;
       }
       broken = true;
-      log.warn("replica segment {} fail", followerAddress, throwable);
+      log.warn("[SEGMENT_REPLICATE_FAIL]{},{}", segmentId, followerAddress, throwable);
       handleFollowerFail();
     }
 
@@ -586,6 +584,11 @@ public class LocalSegment implements Segment {
 
     public boolean isBroken() {
       return broken;
+    }
+
+    @Override
+    public String toString() {
+      return "follower{addr=" + followerAddress + ",confirmOffset=" + confirmOffset + "}";
     }
   }
 

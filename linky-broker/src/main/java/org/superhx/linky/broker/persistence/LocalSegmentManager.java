@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.TextFormat;
 import org.rocksdb.RocksIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,12 +48,12 @@ public class LocalSegmentManager implements Lifecycle {
       for (it.seekToFirst(); it.isValid(); it.next()) {
         try {
           SegmentMeta meta = SegmentMeta.parseFrom(it.value());
-          log.info("[SEGMENT_LOAD]{}", meta);
+          log.info("[LOCAL_SEGMENT_LOAD]{}", TextFormat.shortDebugString(meta));
           segments.put(
               new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex()),
               new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager));
         } catch (InvalidProtocolBufferException e) {
-          log.error("[SEGMENT_META_CORRUPT] unknown meta[{}]", it.value(), e);
+          log.error("[SEGMENT_META_CORRUPT]{}", it.value(), e);
           continue;
         }
       }
@@ -80,15 +81,15 @@ public class LocalSegmentManager implements Lifecycle {
     SegmentKey key = new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
     Segment segment = segments.get(key);
     if (segment != null) {
-      log.info("shutdown old local segment {}", meta);
-      segment.shutdown();
+      log.info("[CREATE_SEGMENT_REPEATED]{}", TextFormat.shortDebugString(meta));
+      return CompletableFuture.completedFuture(null);
     }
     persistentMeta.putSegmentMeta(meta.toBuilder().clearReplicas().build());
     segment = new LocalSegment(meta, brokerContext, dataNodeCnx, chunkManager);
     segment.init();
     segment.start();
     segments.put(key, segment);
-    log.info("create local segment {}", meta);
+    log.info("[CREATE_SEGMENT]{}", TextFormat.shortDebugString(meta));
     return CompletableFuture.completedFuture(null);
   }
 
@@ -119,7 +120,6 @@ public class LocalSegmentManager implements Lifecycle {
               if (segment == null) {
                 throw new IllegalStateException(String.format("cannot find segment %s", key));
               }
-              log.info("create segment {}", segment);
               return new DistributedSegment(segment.getMeta(), segment, dataNodeCnx);
             });
   }

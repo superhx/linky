@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.TextFormat;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,17 +31,20 @@ import java.util.stream.Collectors;
 
 public class DistributedSegment implements Segment {
   private static final Logger log = LoggerFactory.getLogger(DistributedSegment.class);
-  private SegmentMeta.Builder meta;
+  private volatile SegmentMeta.Builder meta;
   private DataNodeCnx dataNodeCnx;
   private int addressIndex;
-  private String address;
+  private volatile String address;
   private Segment localSegment;
+  private final String segmentId;
 
   public DistributedSegment(SegmentMeta meta, Segment localSegment, DataNodeCnx dataNodeCnx) {
     updateMeta(meta);
     this.dataNodeCnx = dataNodeCnx;
     this.localSegment = localSegment;
-    log.info("open distributed segment {}", meta);
+    this.segmentId =
+        String.format("%s@%s@%s", meta.getTopicId(), meta.getPartition(), meta.getIndex());
+    log.info("[DISTRIBUTED_SEGMENT_OPEN]{}", TextFormat.shortDebugString(meta));
   }
 
   @Override
@@ -104,6 +108,11 @@ public class DistributedSegment implements Segment {
     return result;
   }
 
+  @Override
+  public Status getStatus() {
+    return localSegment != null ? localSegment.getStatus() : Status.SEALED;
+  }
+
   protected String getAliveNode() {
     return address;
   }
@@ -111,6 +120,17 @@ public class DistributedSegment implements Segment {
   protected void markReqNodeFail(String address) {
     addressIndex++;
     this.address = meta.getReplicas(addressIndex % meta.getReplicasList().size()).getAddress();
+    // TODO: waiting all address fail then update & control update speed
+    dataNodeCnx
+        .getSegmentMeta(meta.getTopicId(), meta.getPartition(), meta.getIndex())
+        .thenAccept(
+            newMeta -> {
+              updateMeta(newMeta);
+              log.info(
+                  "[DISTRIBUTED_SEGMENT_UPDATE]{},{}",
+                  segmentId,
+                  TextFormat.shortDebugString(newMeta));
+            });
   }
 
   @Override
@@ -169,7 +189,8 @@ public class DistributedSegment implements Segment {
                 .build())
         .thenAccept(
             o -> {
-              meta.setFlag(meta.getFlag() & SEAL_MARK);
+              log.info("[DISTRIBUTED_SEGMENT_SEALED]{},endOffset={}", segmentId, o);
+              meta.setFlag(meta.getFlag() | SEAL_MARK);
               meta.setEndOffset(o);
             });
   }

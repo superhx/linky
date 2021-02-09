@@ -13,6 +13,8 @@ service SegmentManagerService {
 
     rpc getSegments(GetSegmentsRequest) returns (GetSegmentsResponse) {}
 
+    rpc getSegment(GetSegmentRequest) returns (GetSegmentResponse) {}
+
     rpc seal(SealRequest) returns (SealResponse) {}
 }
 
@@ -39,6 +41,16 @@ message GetSegmentsRequest {
 
 message GetSegmentsResponse {
     repeated SegmentMeta segments = 1;
+}
+
+message GetSegmentRequest {
+    int32 topicId = 1;
+    int32 partition = 2;
+    int32 index = 3;
+}
+
+message GetSegmentResponse {
+    SegmentMeta meta = 1;
 }
 
 message SealRequest {

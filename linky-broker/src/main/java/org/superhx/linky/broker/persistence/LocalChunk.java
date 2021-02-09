@@ -104,15 +104,6 @@ public class LocalChunk implements Chunk {
     return batchIndex.getOffset() + batchIndex.getCount();
   }
 
-  @Override
-  public int getTerm() {
-    Indexer.BatchIndex batchIndex = indexer.getLastIndex(this);
-    if (batchIndex == null) {
-      return 0;
-    }
-    return batchIndex.getTerm();
-  }
-
   //
   //  @Override
   //  public long getReclaimOffset() {

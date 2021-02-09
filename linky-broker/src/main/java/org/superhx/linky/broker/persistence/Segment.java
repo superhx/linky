@@ -72,7 +72,7 @@ public interface Segment extends Lifecycle {
   void updateMeta(SegmentMeta meta);
 
   default Status getStatus() {
-    return Status.WRITABLE;
+    return Status.SEALED;
   }
 
   class AppendResult {
@@ -80,7 +80,7 @@ public interface Segment extends Lifecycle {
       SUCCESS,
       REPLICA_LOSS,
       REPLICA_BREAK,
-      TERM_EXPIRED
+      SEALED
     }
 
     private Status status = Status.SUCCESS;
@@ -119,6 +119,7 @@ public interface Segment extends Lifecycle {
   enum Status {
     WRITABLE,
     REPLICA_LOSS,
-    REPLICA_BREAK
+    REPLICA_BREAK,
+    SEALED
   }
 }

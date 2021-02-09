@@ -42,8 +42,7 @@ public class DataNodeCnx {
 
   public DataNodeCnx() {}
 
-  public CompletableFuture<Void> createSegment(
-      int topic, int partition, int lastIndex) {
+  public CompletableFuture<Void> createSegment(int topic, int partition, int lastIndex) {
     CompletableFuture<Void> result = new CompletableFuture<>();
     getSegmentManagerServiceStub()
         .create(
@@ -52,7 +51,7 @@ public class DataNodeCnx {
                 .setPartition(partition)
                 .setLastIndex(lastIndex)
                 .setAddress(brokerContext.getAddress())
-                    // TODO:
+                // TODO:
                 .setStartOffset(0L)
                 .build(),
             new StreamObserver<SegmentManagerServiceProto.CreateResponse>() {
@@ -89,6 +88,32 @@ public class DataNodeCnx {
               public void onNext(
                   SegmentManagerServiceProto.GetSegmentsResponse getSegmentsResponse) {
                 result.complete(getSegmentsResponse.getSegmentsList());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                result.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return result;
+  }
+
+  public CompletableFuture<SegmentMeta> getSegmentMeta(int topic, int partition, int index) {
+    CompletableFuture<SegmentMeta> result = new CompletableFuture<>();
+    getSegmentManagerServiceStub()
+        .getSegment(
+            SegmentManagerServiceProto.GetSegmentRequest.newBuilder()
+                .setTopicId(topic)
+                .setPartition(partition)
+                .setIndex(index)
+                .build(),
+            new StreamObserver<SegmentManagerServiceProto.GetSegmentResponse>() {
+              @Override
+              public void onNext(SegmentManagerServiceProto.GetSegmentResponse getSegmentResponse) {
+                result.complete(getSegmentResponse.getMeta());
               }
 
               @Override
