@@ -200,7 +200,6 @@ public class LocalSegment implements Segment {
           r -> {
             switch (r.getStatus()) {
               case SUCCESS:
-              case REPLICA_LOSS:
                 commitOffset = r.getOffset() + recordsCount;
             }
             return r;

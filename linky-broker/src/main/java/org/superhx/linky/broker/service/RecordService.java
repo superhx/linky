@@ -58,11 +58,18 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
         .append(request.getBatchRecord())
         .thenAccept(
             appendResult -> {
-              PutResponse response =
-                  PutResponse.newBuilder()
-                      .setStatus(PutResponse.Status.SUCCESS)
-                      .setCursor(ByteString.copyFrom(appendResult.getCursor()))
-                      .build();
+              PutResponse response;
+              switch (appendResult.getStatus()) {
+                case SUCCESS:
+                  response =
+                      PutResponse.newBuilder()
+                          .setStatus(PutResponse.Status.SUCCESS)
+                          .setCursor(ByteString.copyFrom(appendResult.getCursor()))
+                          .build();
+                  break;
+                default:
+                  response = PutResponse.newBuilder().setStatus(PutResponse.Status.FAIL).build();
+              }
               responseObserver.onNext(response);
               responseObserver.onCompleted();
             })

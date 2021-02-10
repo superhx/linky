@@ -58,6 +58,7 @@ public class LocalPartitionImpl implements Partition {
                 case REPLICA_LOSS:
                   return s.append(new Segment.AppendContext(), batchRecord);
                 case REPLICA_BREAK:
+                case SEALED:
                   return nextSegment(s)
                       .thenCompose(n -> n.append(new Segment.AppendContext(), batchRecord));
               }
@@ -65,8 +66,13 @@ public class LocalPartitionImpl implements Partition {
             })
         .thenApply(
             appendResult -> {
-              cursor.putLong(appendResult.getOffset());
-              return new AppendResult(cursor.array());
+              switch (appendResult.getStatus()) {
+                case SUCCESS:
+                  cursor.putLong(appendResult.getOffset());
+                  return new AppendResult(cursor.array());
+                default:
+                  return new AppendResult(AppendStatus.FAIL);
+              }
             });
   }
 

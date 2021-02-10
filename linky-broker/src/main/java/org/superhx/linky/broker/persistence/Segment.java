@@ -78,7 +78,6 @@ public interface Segment extends Lifecycle {
   class AppendResult {
     enum Status {
       SUCCESS,
-      REPLICA_LOSS,
       REPLICA_BREAK,
       SEALED
     }

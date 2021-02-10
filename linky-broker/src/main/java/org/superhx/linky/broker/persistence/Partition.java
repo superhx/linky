@@ -35,12 +35,21 @@ public interface Partition {
 
   PartitionMeta meta();
 
+  enum AppendStatus {
+    SUCCESS,
+    FAIL
+  }
+
   class AppendResult {
     private AppendStatus status = AppendStatus.SUCCESS;
     private byte[] cursor;
 
     public AppendResult(byte[] cursor) {
       this.cursor = cursor;
+    }
+
+    public AppendResult(AppendStatus status) {
+      this.status = status;
     }
 
     public AppendStatus getStatus() {
@@ -58,10 +67,7 @@ public interface Partition {
     public void setCursor(byte[] cursor) {
       this.cursor = cursor;
     }
-  }
 
-  enum AppendStatus {
-    SUCCESS;
   }
 
   class GetResult {
