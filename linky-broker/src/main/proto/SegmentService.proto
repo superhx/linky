@@ -45,6 +45,7 @@ message GetRecordResponse {
 message ReplicateRequest {
     BatchRecord batchRecord = 1;
     int64 commitOffset = 2;
+    int32 term = 3;
 }
 
 message ReplicateResponse {
