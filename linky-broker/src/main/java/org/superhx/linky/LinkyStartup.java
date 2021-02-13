@@ -144,7 +144,7 @@ public class LinkyStartup implements Lifecycle {
     election.registerListener(segmentRegistry);
     election.registerListener(partitionRegistry);
 
-    partitionRegistry.createTopic("FOO", 1, 2);
+    partitionRegistry.createTopic("FOO", 1, 1);
 
     server =
         ServerBuilder.forPort(Integer.valueOf(port))

@@ -69,7 +69,7 @@ public class ChunkManager implements Lifecycle {
           chunk.setIndexer(indexer);
           chunk.init();
           SegmentKey segmentKey =
-              new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getSegmentIndex());
+              new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
           List<Chunk> chunks = segmentChunksMap.get(segmentKey);
           if (chunks == null) {
             chunks = new ArrayList<>(1);
@@ -127,7 +127,7 @@ public class ChunkManager implements Lifecycle {
     chunk.start();
 
     SegmentKey segmentKey =
-        new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getSegmentIndex());
+        new SegmentKey(meta.getTopicId(), meta.getPartition(), meta.getIndex());
     List<Chunk> chunks = segmentChunksMap.get(segmentKey);
     if (chunks == null) {
       chunks = new ArrayList<>(1);

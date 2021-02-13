@@ -24,6 +24,8 @@ service SegmentService {
     rpc status(StatusRequest) returns (StatusResponse) {}
 
     rpc update(UpdateRequest) returns (UpdateResponse) {}
+
+    rpc getKV(GetKVRequest) returns (GetKVResponse) {}
 }
 
 message GetRecordRequest {
@@ -106,4 +108,13 @@ message UpdateRequest {
 }
 
 message UpdateResponse {
+}
+
+message GetKVRequest {
+    bytes key = 1;
+    bool meta = 2;
+}
+
+message GetKVResponse {
+    BatchRecord record = 1;
 }

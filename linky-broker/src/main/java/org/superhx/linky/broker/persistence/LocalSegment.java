@@ -90,7 +90,7 @@ public class LocalSegment implements Segment {
               ChunkMeta.newBuilder()
                   .setTopicId(topicId)
                   .setPartition(partition)
-                  .setSegmentIndex(index)
+                  .setIndex(index)
                   .setStartOffset(0)
                   .build());
       this.chunks.put(0L, lastChunk);
@@ -160,28 +160,28 @@ public class LocalSegment implements Segment {
 
   @Override
   public synchronized CompletableFuture<AppendResult> append(
-      AppendContext ctx, BatchRecord batchRecord) {
+      AppendContext context, BatchRecord batchRecord) {
     CompletableFuture<AppendResult> rst = new CompletableFuture<>();
     if (this.status == Status.REPLICA_BREAK) {
-      return CompletableFuture.completedFuture(new AppendResult(REPLICA_BREAK, NO_OFFSET));
+      return CompletableFuture.completedFuture(new AppendResult(REPLICA_BREAK));
     }
     if (this.status == Status.SEALED) {
-      return CompletableFuture.completedFuture(new AppendResult(SEALED, NO_OFFSET));
+      return CompletableFuture.completedFuture(new AppendResult(SEALED));
     }
     try {
       int recordsCount = batchRecord.getRecordsCount();
       long offset = nextOffset.getAndAdd(recordsCount);
-      batchRecord =
+      BatchRecord.Builder batchRecordBuilder =
           BatchRecord.newBuilder(batchRecord)
               .setTopicId(meta.getTopicId())
-              .setSegmentIndex(index)
+              .setIndex(index)
               .setFirstOffset(offset)
-              .setStoreTimestamp(System.currentTimeMillis())
-              .setTerm(ctx.getTerm())
-              .build();
+              .setStoreTimestamp(System.currentTimeMillis());
+      context.getHook().before(context, batchRecordBuilder);
+      batchRecord = batchRecordBuilder.build();
 
       CompletableFuture<Void> localWriteFuture = getLastChunk().append(batchRecord);
-      waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(offset)));
+      waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(index, offset)));
 
       SegmentServiceProto.ReplicateRequest.Builder replicateRequest =
           SegmentServiceProto.ReplicateRequest.newBuilder()
@@ -265,6 +265,12 @@ public class LocalSegment implements Segment {
   @Override
   public CompletableFuture<BatchRecord> get(long offset) {
     return getChunk(offset).get(offset);
+  }
+
+  @Override
+  public CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta) {
+    // TODO: support multiple chunk
+    return lastChunk.getKV(key, meta);
   }
 
   @Override
@@ -457,7 +463,7 @@ public class LocalSegment implements Segment {
                   BatchRecord.newBuilder()
                       .setTopicId(topicId)
                       .setPartition(partition)
-                      .setSegmentIndex(index)
+                      .setIndex(index)
                       .setFirstOffset(NO_OFFSET)
                       .build()));
     }
@@ -612,7 +618,7 @@ public class LocalSegment implements Segment {
       status = Status.REPLICA_BREAK;
       checkWaiting();
       for (Waiting waiting : waitConfirmRequests) {
-        waiting.future.complete(new AppendResult(REPLICA_BREAK, NO_OFFSET));
+        waiting.future.complete(new AppendResult(REPLICA_BREAK));
       }
     }
   }
@@ -620,7 +626,7 @@ public class LocalSegment implements Segment {
   protected synchronized void handleExpired() {
     this.status = Status.SEALED;
     for (Waiting waiting : waitConfirmRequests) {
-      waiting.future.complete(new AppendResult(SEALED, NO_OFFSET));
+      waiting.future.complete(new AppendResult(SEALED));
     }
     this.endOffset = confirmOffset;
     log.warn("[SEGMENT_PASSIVELY_EXPIRED]{},endOffset={}", segmentId, endOffset);

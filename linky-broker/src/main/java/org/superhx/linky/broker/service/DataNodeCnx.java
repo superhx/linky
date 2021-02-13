@@ -183,6 +183,10 @@ public class DataNodeCnx {
     getRecordServiceStub(meta.getAddress()).get(getRequest, responseObserver);
   }
 
+  public void redirectRecordGetKV(PartitionMeta meta, GetKVRequest getKVRequest, StreamObserver<GetKVResponse> responseObserver) {
+      getRecordServiceStub(meta.getAddress()).getKV(getKVRequest, responseObserver);
+  }
+
   public CompletableFuture<Void> reclaim(
       String address, SegmentServiceProto.ReclaimRequest request) {
     CompletableFuture<Void> rst = new CompletableFuture<>();

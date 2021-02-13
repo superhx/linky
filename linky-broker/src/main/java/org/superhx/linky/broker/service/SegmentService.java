@@ -61,7 +61,7 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
             localSegmentManager.getSegment(
                 replicateRequest.getBatchRecord().getTopicId(),
                 replicateRequest.getBatchRecord().getPartition(),
-                replicateRequest.getBatchRecord().getSegmentIndex());
+                replicateRequest.getBatchRecord().getIndex());
         if (segment == null) {
           responseObserver.onNext(
               SegmentServiceProto.ReplicateResponse.newBuilder()

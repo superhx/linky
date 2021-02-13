@@ -59,10 +59,11 @@ public class LocalChunk implements Chunk {
         Indexer.BatchIndex.newBuilder()
             .setTopicId(batchRecord.getTopicId())
             .setPartition(batchRecord.getPartition())
-            .setSegmentIndex(batchRecord.getSegmentIndex())
+            .setSegmentIndex(batchRecord.getIndex())
             .setOffset(batchRecord.getFirstOffset())
             .setCount(batchRecord.getRecordsCount())
             .setChunk(this);
+    batchRecord.getRecordsList().forEach(r -> index.addKey(r.getKey().toByteArray()));
     journal.append(
         bytesData,
         r -> {
@@ -88,6 +89,15 @@ public class LocalChunk implements Chunk {
                 throw new LinkyIOException(e);
               }
             });
+  }
+
+  @Override
+  public CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta) {
+    long offset = indexer.getKV(this, key, meta);
+    if (offset == Constants.NOOP_OFFSET) {
+      return CompletableFuture.completedFuture(null);
+    }
+    return get(offset);
   }
 
   @Override

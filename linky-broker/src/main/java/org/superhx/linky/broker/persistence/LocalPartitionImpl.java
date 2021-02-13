@@ -16,23 +16,33 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.common.io.BaseEncoding;
+import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.LinkyIOException;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
+import org.superhx.linky.service.proto.Record;
 
 import java.nio.ByteBuffer;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class LocalPartitionImpl implements Partition {
+  private static final int TIMER_WINDOW = (int) TimeUnit.DAYS.toSeconds(1);
+  private static final int TIMER_WHEEL_SEGMENT = (int) TimeUnit.MINUTES.toSeconds(10);
+  /** (timestamp, index, offset) */
+  private static final int TIMER_INDEX_SIZE = 8 + 4 + 8;
+
+  private static final String TIMER_SLOT_RECORD_HEADER = "TS";
+  private static final String TIMER_PRE_CURSOR_HEADER = "TC";
+  private static final ScheduledExecutorService schedule =
+      Utils.newScheduledThreadPool(1, "TIMER_SAVE");
+
   private static final Logger log = LoggerFactory.getLogger(LocalSegmentManager.class);
   private PartitionMeta meta;
   private AtomicReference<PartitionStatus> status = new AtomicReference<>(PartitionStatus.NOOP);
@@ -41,6 +51,8 @@ public class LocalPartitionImpl implements Partition {
   private LocalSegmentManager localSegmentManager;
   private CompletableFuture<Segment> lastSegmentFuture;
   private Map<Segment, CompletableFuture<Segment>> nextSegmentFutures = new ConcurrentHashMap<>();
+  private ReentrantLock appendLock = new ReentrantLock();
+  private Queue<TimerIndex> timerIndexQueue = new LinkedBlockingQueue<>();
 
   public LocalPartitionImpl(PartitionMeta meta) {
     this.meta = meta;
@@ -48,19 +60,18 @@ public class LocalPartitionImpl implements Partition {
 
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-    ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
+    TimerIndex timerIndex = new TimerIndex().setTimestamp(batchRecord.getVisibleTimestamp());
     return getLastSegment()
         .thenCompose(
             s -> {
-              cursor.putInt(s.getIndex());
               switch (s.getStatus()) {
                 case WRITABLE:
-                case REPLICA_LOSS:
-                  return s.append(new Segment.AppendContext(), batchRecord);
+                  return append0(s, batchRecord);
                 case REPLICA_BREAK:
+                  return nextSegment(s).thenCompose(n -> append0(n, batchRecord));
                 case SEALED:
-                  return nextSegment(s)
-                      .thenCompose(n -> n.append(new Segment.AppendContext(), batchRecord));
+                  return CompletableFuture.completedFuture(
+                      new Segment.AppendResult(Segment.AppendResult.Status.SEALED));
               }
               throw new LinkyIOException(String.format("Unknown status %s", s.getStatus()));
             })
@@ -68,12 +79,136 @@ public class LocalPartitionImpl implements Partition {
             appendResult -> {
               switch (appendResult.getStatus()) {
                 case SUCCESS:
+                  timerIndex.setOffset(appendResult.getOffset()).setIndex(appendResult.getIndex());
+//                  timerIndexQueue.offer(timerIndex);
+                  ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
+                  cursor.putInt(appendResult.getIndex());
                   cursor.putLong(appendResult.getOffset());
+                  commitedCursor = cursor.array();
                   return new AppendResult(cursor.array());
                 default:
                   return new AppendResult(AppendStatus.FAIL);
               }
             });
+  }
+
+  protected void buildTimerIndex() throws Exception {
+
+    Cursor expectedNextCursor = this.expectedNextCursor;
+    Map<Integer, List<TimerIndex>> timestamp2Index = new HashMap<>();
+    for (TimerIndex timerIndex = timerIndexQueue.poll();
+        timerIndex != null;
+        timerIndex = timerIndexQueue.poll()) {
+      if (expectedNextCursor == null
+          || timerIndex.getIndex() != expectedNextCursor.getIndex()
+              && timerIndex.getOffset() != expectedNextCursor.getOffset()) {
+        log.debug(
+            "[TIMER_INDEX_TEMP_SKIP]timerIndex={},expectedNextCursor={}",
+            timerIndex,
+            expectedNextCursor);
+      }
+
+      // 不为timer的也要处理，用于推进 slo
+      if (timerIndex.getTimestamp() == 0) {
+        continue;
+      }
+      int slot = (int) (timerIndex.getTimestamp() % TIMER_WINDOW);
+      // index 是否要存储真实时间，滚动的时候不需要重新读取原始的时间
+      List<TimerIndex> indexes = timestamp2Index.get(slot);
+      if (indexes == null) {
+        indexes = new LinkedList<>();
+        timestamp2Index.put(slot, indexes);
+      }
+      indexes.add(timerIndex);
+    }
+    if (timestamp2Index.size() == 0) {
+      return;
+    }
+
+    Segment lastSegment = getLastSegment().get();
+    // index offset timestamp
+    for (Map.Entry<Integer, List<TimerIndex>> entry : timestamp2Index.entrySet()) {
+      int slot = entry.getKey();
+      List<TimerIndex> indexes = entry.getValue();
+      byte[] indexesBytes = new byte[indexes.size() * TIMER_INDEX_SIZE];
+      ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
+      for (TimerIndex timerIndex : indexes) {
+        indexesBuf.putLong(timerIndex.getTimestamp());
+        indexesBuf.putInt(timerIndex.getIndex());
+        indexesBuf.putLong(timerIndex.getOffset());
+      }
+      BatchRecord.Builder indexesRecord = BatchRecord.newBuilder();
+      indexesRecord
+          .setFlag(Constants.TIMER_INDEX_FLAG)
+          .addRecords(
+              Record.newBuilder()
+                  .putHeaders(
+                      TIMER_SLOT_RECORD_HEADER,
+                      BaseEncoding.base16().encode(ByteBuffer.allocate(4).putInt(slot).array()))
+                  .putHeaders(
+                      TIMER_PRE_CURSOR_HEADER,
+                      BaseEncoding.base16().encode(getInflightTimerCursor(slot)))
+                  .setValue(ByteString.copyFrom(indexesBytes))
+                  .build());
+      // TODO: handle slo & recover
+
+      appendLock.lock();
+      try {
+        ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
+        Segment.AppendContext context =
+            new Segment.AppendContext()
+                .setHook(
+                    new Segment.AppendHook() {
+                      @Override
+                      public void before(
+                          Segment.AppendContext context, BatchRecord.Builder record) {
+                        cursor.putInt(context.getIndex());
+                        cursor.putLong(context.getOffset());
+                        putInflightTimerCursor(slot, cursor.array());
+                      }
+                    });
+        lastSegment
+            .append(context, indexesRecord.build())
+            .thenAccept(
+                appendResult -> {
+                  switch (appendResult.getStatus()) {
+                    case SUCCESS:
+                      putCommitTimerCursor(slot, cursor.array());
+                      break;
+                    default:
+                      throw new RuntimeException(
+                          String.format("append fail %s", appendResult.getStatus()));
+                  }
+                });
+      } finally {
+        appendLock.unlock();
+      }
+    }
+  }
+
+  private long TIMER_CURSOR_SNAPSHOT_INTERVAL_MILLS = TimeUnit.SECONDS.toMillis(10);
+  private volatile Cursor expectedNextCursor;
+  private Map<Integer, byte[]> inflightCursors = new ConcurrentHashMap<>();
+  private Map<Integer, byte[]> commitedCursors = new ConcurrentHashMap<>();
+  private byte[] commitedCursor;
+  private long lastTimerCursorSnapshotTimestamp = System.currentTimeMillis();
+
+  private byte[] getInflightTimerCursor(int slot) {
+    return null;
+  }
+
+  private void putInflightTimerCursor(int slot, byte[] cursor) {}
+
+  private void putCommitTimerCursor(int slot, byte[] cursor) {}
+
+  public CompletableFuture<Segment.AppendResult> append0(Segment segment, BatchRecord record) {
+    appendLock.lock();
+    try {
+      Segment.AppendContext context = new Segment.AppendContext();
+      return segment.append(context, record);
+    } finally {
+      appendLock.unlock();
+    }
   }
 
   protected CompletableFuture<Segment> getLastSegment() {
@@ -175,6 +310,36 @@ public class LocalPartitionImpl implements Partition {
           }
           return getResult;
         });
+  }
+
+  @Override
+  public CompletableFuture<GetKVResult> getKV(byte[] key, boolean meta) {
+    // TODO: async refactor
+    CompletableFuture future = new CompletableFuture();
+    BatchRecord record = null;
+    try {
+      Segment lastSegment = this.lastSegment;
+      if (lastSegment != null) {
+        record = lastSegment.getKV(key, meta).get();
+      }
+      if (record != null) {
+        future.complete(new GetKVResult(record));
+        return future;
+      }
+      for (int i = segments.size() - 1; i >= 0; i--) {
+        Segment segment = segments.get(i);
+        record = segment.getKV(key, meta).get();
+        if (record != null) {
+          future.complete(new GetKVResult(record));
+          break;
+        }
+      }
+    } catch (Exception e) {
+      future.completeExceptionally(e);
+      return future;
+    }
+    future.complete(new GetKVResult());
+    return future;
   }
 
   @Override

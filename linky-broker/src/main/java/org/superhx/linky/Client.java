@@ -24,35 +24,30 @@ import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.*;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class Client {
   static int count = 1;
-  //    static int count = 1;
-  //    static int count = 0;
 
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
-        ManagedChannelBuilder.forTarget("localhost:9592").usePlaintext().build();
+        ManagedChannelBuilder.forTarget("localhost:9591").usePlaintext().build();
     RecordServiceGrpc.RecordServiceStub stub = RecordServiceGrpc.newStub(channel);
     final AtomicLong maxOffset = new AtomicLong();
     long start = System.currentTimeMillis();
     CountDownLatch latch = new CountDownLatch(count);
     for (int i = 0; i < count; i++) {
       String body = "";
-      //      for (int j = 0; j < 1024; j++) {
-      //        body += "hello";
-      //      }
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
               .addRecords(
                   Record.newBuilder()
-                      .setKey("rk")
+                      .setKey(ByteString.copyFrom("rk", Charset.forName("UTF-8")))
                       .setValue(ByteString.copyFrom((new Date() + body).getBytes()))
                       .build())
               .build();
@@ -86,53 +81,85 @@ public class Client {
     System.out.println(
         String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
-    AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
-    final boolean[] end = {false};
-    for (int i = 0; i < 100; i++) {
-      if (end[0]) {
-        break;
-      }
-      CountDownLatch getLatch = new CountDownLatch(1);
-      stub.get(
-          GetRequest.newBuilder()
-              .setTopic("FOO")
-              .setPartition(0)
-              .setCursor(ByteString.copyFrom(cursor.get()))
-              .build(),
-          new StreamObserver<GetResponse>() {
-            @Override
-            public void onNext(GetResponse getResponse) {
-              if (getResponse.getStatus() == GetResponse.Status.NO_NEW_MSG) {
-                end[0] = true;
-                return;
-              }
-              ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
-              System.out.println(
-                  "Get return offset:"
-                      + getResponse.getBatchRecord().getFirstOffset()
-                      + " count:"
-                      + getResponse.getBatchRecord().getRecordsCount()
-                      + " next: seg "
-                      + buf.getInt()
-                      + " segOffset "
-                      + buf.getLong()
-                      + " body"
-                      + TextFormat.shortDebugString(getResponse.getBatchRecord()));
-              cursor.set(buf.array());
-            }
+    getkv(stub, "rk");
+    getkv(stub, "rk1");
 
-            @Override
-            public void onError(Throwable throwable) {
-              throwable.printStackTrace();
-            }
-
-            @Override
-            public void onCompleted() {
-              getLatch.countDown();
-            }
-          });
-      getLatch.await();
-    }
+    //    AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
+    //    final boolean[] end = {false};
+    //    for (int i = 0; i < 100; i++) {
+    //      if (end[0]) {
+    //        break;
+    //      }
+    //      CountDownLatch getLatch = new CountDownLatch(1);
+    //      stub.get(
+    //          GetRequest.newBuilder()
+    //              .setTopic("FOO")
+    //              .setPartition(0)
+    //              .setCursor(ByteString.copyFrom(cursor.get()))
+    //              .build(),
+    //          new StreamObserver<GetResponse>() {
+    //            @Override
+    //            public void onNext(GetResponse getResponse) {
+    //              if (getResponse.getStatus() == GetResponse.Status.NO_NEW_MSG) {
+    //                end[0] = true;
+    //                return;
+    //              }
+    //              ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
+    //              System.out.println(
+    //                  "Get return offset:"
+    //                      + getResponse.getBatchRecord().getFirstOffset()
+    //                      + " count:"
+    //                      + getResponse.getBatchRecord().getRecordsCount()
+    //                      + " next: seg "
+    //                      + buf.getInt()
+    //                      + " segOffset "
+    //                      + buf.getLong()
+    //                      + " body"
+    //                      + TextFormat.shortDebugString(getResponse.getBatchRecord()));
+    //              cursor.set(buf.array());
+    //            }
+    //
+    //            @Override
+    //            public void onError(Throwable throwable) {
+    //              throwable.printStackTrace();
+    //            }
+    //
+    //            @Override
+    //            public void onCompleted() {
+    //              getLatch.countDown();
+    //            }
+    //          });
+    //      getLatch.await();
+    //    }
     channel.shutdownNow().awaitTermination(1, TimeUnit.SECONDS);
+  }
+
+  private static void getkv(RecordServiceGrpc.RecordServiceStub stub, String key)
+      throws InterruptedException {
+    CountDownLatch getKvLatch = new CountDownLatch(1);
+    stub.getKV(
+        GetKVRequest.newBuilder()
+            .setTopic("FOO")
+            .setPartition(0)
+            .setKey(ByteString.copyFrom(key, Charset.forName("UTF-8")))
+            .build(),
+        new StreamObserver<GetKVResponse>() {
+          @Override
+          public void onNext(GetKVResponse getKVResponse) {
+            System.out.println(
+                "getkv " + TextFormat.shortDebugString(getKVResponse.getBatchRecord()));
+            getKvLatch.countDown();
+          }
+
+          @Override
+          public void onError(Throwable throwable) {
+            throwable.printStackTrace();
+            getKvLatch.countDown();
+          }
+
+          @Override
+          public void onCompleted() {}
+        });
+    getKvLatch.await();
   }
 }

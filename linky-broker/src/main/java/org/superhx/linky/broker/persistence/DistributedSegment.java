@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.ByteString;
 import com.google.protobuf.TextFormat;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -48,12 +49,11 @@ public class DistributedSegment implements Segment {
   }
 
   @Override
-  public CompletableFuture<AppendResult> append(AppendContext ctx, BatchRecord batchRecord) {
-    ctx.setTerm(0);
+  public CompletableFuture<AppendResult> append(AppendContext context, BatchRecord batchRecord) {
     if (localSegment == null) {
       throw new UnsupportedOperationException();
     }
-    return localSegment.append(ctx, batchRecord);
+    return localSegment.append(context, batchRecord);
   }
 
   @Override
@@ -75,6 +75,41 @@ public class DistributedSegment implements Segment {
                       });
               return null;
             });
+    return result;
+  }
+
+  @Override
+  public CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta) {
+    // TODO: check replicate process, handle network failure
+    if (localSegment != null) {
+      return localSegment.getKV(key, meta);
+    }
+
+    CompletableFuture<BatchRecord> result = new CompletableFuture<>();
+    String aliveNode = getAliveNode();
+    dataNodeCnx
+        .getSegmentServiceStub(aliveNode)
+        .getKV(
+            SegmentServiceProto.GetKVRequest.newBuilder()
+                .setKey(ByteString.copyFrom(key))
+                .setMeta(meta)
+                .build(),
+            new StreamObserver<SegmentServiceProto.GetKVResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.GetKVResponse getKVResponse) {
+                result.complete(getKVResponse.getRecord());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                markReqNodeFail(address);
+                result.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+
     return result;
   }
 
@@ -117,7 +152,7 @@ public class DistributedSegment implements Segment {
     return address;
   }
 
-  protected void markReqNodeFail(String address) {
+  protected synchronized void markReqNodeFail(String address) {
     addressIndex++;
     this.address = meta.getReplicas(addressIndex % meta.getReplicasList().size()).getAddress();
     // TODO: waiting all address fail then update & control update speed

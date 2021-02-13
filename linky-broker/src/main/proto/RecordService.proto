@@ -10,9 +10,11 @@ option java_outer_classname = "RecordServiceProto";
 
 
 service RecordService {
-    rpc Put(PutRequest) returns (PutResponse) {}
+    rpc put(PutRequest) returns (PutResponse) {}
 
-    rpc Get(GetRequest) returns (GetResponse) {}
+    rpc get(GetRequest) returns (GetResponse) {}
+
+    rpc getKV(GetKVRequest) returns (GetKVResponse) {}
 }
 
 message PutRequest {
@@ -45,4 +47,14 @@ message GetResponse {
     Status status = 1;
     BatchRecord batchRecord = 2;
     bytes nextCursor = 3;
+}
+
+message GetKVRequest {
+    string topic = 1;
+    int32 partition = 2;
+    bytes key = 3;
+}
+
+message GetKVResponse {
+    BatchRecord batchRecord = 1;
 }

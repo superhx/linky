@@ -21,10 +21,14 @@ import org.superhx.linky.broker.Utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
 public class RocksDBTTest {
   public static void main(String... args) throws RocksDBException {
+    System.out.println(new Date(Long.MAX_VALUE));
+    System.out.println(new Date(System.currentTimeMillis()));
+
     RocksDB.loadLibrary();
     DBOptions options =
         new DBOptions().setCreateIfMissing(true).setCreateMissingColumnFamilies(true);

@@ -27,6 +27,8 @@ public interface Partition {
 
   CompletableFuture<GetResult> get(byte[] cursor);
 
+  CompletableFuture<GetKVResult> getKV(byte[] key, boolean meta);
+
   CompletableFuture<PartitionStatus> open();
 
   CompletableFuture<Void> close();
@@ -67,7 +69,6 @@ public interface Partition {
     public void setCursor(byte[] cursor) {
       this.cursor = cursor;
     }
-
   }
 
   class GetResult {
@@ -105,6 +106,24 @@ public interface Partition {
     NO_NEW_MSG;
   }
 
+  class GetKVResult {
+    private BatchRecord batchRecord;
+
+    public GetKVResult() {}
+
+    public GetKVResult(BatchRecord batchRecord) {
+      this.batchRecord = batchRecord;
+    }
+
+    public BatchRecord getBatchRecord() {
+      return batchRecord;
+    }
+
+    public void setBatchRecord(BatchRecord batchRecord) {
+      this.batchRecord = batchRecord;
+    }
+  }
+
   enum PartitionStatus {
     NOOP,
     OPENING,
@@ -112,5 +131,59 @@ public interface Partition {
     SHUTTING,
     SHUTDOWN,
     ERROR
+  }
+
+  class TimerIndex {
+    private long timestamp;
+    private int index;
+    private long offset;
+
+    public long getTimestamp() {
+      return timestamp;
+    }
+
+    public TimerIndex setTimestamp(long timestamp) {
+      this.timestamp = timestamp;
+      return this;
+    }
+
+    public int getIndex() {
+      return index;
+    }
+
+    public TimerIndex setIndex(int index) {
+      this.index = index;
+      return this;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
+
+    public TimerIndex setOffset(long offset) {
+      this.offset = offset;
+      return this;
+    }
+  }
+
+  class Cursor {
+    private int index;
+    private long offset;
+
+    public int getIndex() {
+      return index;
+    }
+
+    public void setIndex(int index) {
+      this.index = index;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
+
+    public void setOffset(long offset) {
+      this.offset = offset;
+    }
   }
 }

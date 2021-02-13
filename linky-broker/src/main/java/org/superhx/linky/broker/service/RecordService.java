@@ -117,6 +117,36 @@ public class RecordService extends RecordServiceGrpc.RecordServiceImplBase imple
             });
   }
 
+  @Override
+  public void getKV(GetKVRequest request, StreamObserver<GetKVResponse> responseObserver) {
+    Partition partition = partitionManager.getPartition(request.getTopic(), request.getPartition());
+    if (partition == null) {
+      PartitionMeta meta =
+          Optional.ofNullable(partitions.get(request.getTopic()))
+              .map(m -> m.get(request.getPartition()))
+              .get();
+      dataNodeCnx.redirectRecordGetKV(meta, request, responseObserver);
+      return;
+    }
+    partition
+        .getKV(request.getKey().toByteArray(), false)
+        .thenAccept(
+            rst -> {
+              GetKVResponse.Builder resp = GetKVResponse.newBuilder();
+              if (rst.getBatchRecord() != null) {
+                resp.setBatchRecord(rst.getBatchRecord());
+              }
+              responseObserver.onNext(resp.build());
+              responseObserver.onCompleted();
+            })
+        .exceptionally(
+            t -> {
+              log.warn("get kv fail", t);
+              responseObserver.onError(t);
+              return null;
+            });
+  }
+
   public void setPartitionManager(PartitionManager partitionManager) {
     this.partitionManager = partitionManager;
   }

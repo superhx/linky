@@ -16,34 +16,21 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import org.superhx.linky.broker.Lifecycle;
-import org.superhx.linky.service.proto.BatchRecord;
+import java.nio.ByteBuffer;
 
-import java.util.concurrent.CompletableFuture;
+public class TimerWheel {
+  /** SLOT[segmentIndex 4 bytes, offset 8 bytes] */
+  private static final int SLOT_SIZE = 12;
 
-public interface Chunk extends Lifecycle {
+  private static final byte[] NOOP_CURSOR = new byte[12];
 
-  int chunkId();
+  public TimerWheel() {
+    ByteBuffer.wrap(NOOP_CURSOR).putInt(-1).putLong(-1);
+  }
 
-  CompletableFuture<Void> append(BatchRecord batchRecord);
+  public void putInflightSlot(long timeSecs, byte[] cursor) {}
 
-  CompletableFuture<BatchRecord> get(long offset);
-
-  CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta);
-
-  long startOffset();
-
-  long getConfirmOffset();
-
-  class AppendResult {
-    private long offset;
-
-    public AppendResult(long offset) {
-      this.offset = offset;
-    }
-
-    public long getOffset() {
-      return offset;
-    }
+  public byte[] getInflightSlot(long timeSecs) {
+    return null;
   }
 }

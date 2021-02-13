@@ -9,7 +9,7 @@ option java_outer_classname = "ChunkMetaProto";
 message ChunkMeta {
     int32 topicId = 1;
     int32 partition = 2;
-    int32 segmentIndex = 3;
+    int32 index = 3;
     int32 chunkId = 4;
     int64 startOffset = 5;
     string path = 6;

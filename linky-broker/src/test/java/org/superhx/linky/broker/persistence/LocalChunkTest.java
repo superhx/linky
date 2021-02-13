@@ -29,7 +29,7 @@ public class LocalChunkTest {
   //            .setChunkId(0)
   //            .setTopicId(0)
   //            .setPartition(1)
-  //            .setSegmentIndex(2)
+  //            .setIndex(2)
   //            .setStartOffset(200)
   //            .build();
   //    chunk = new LocalChunk(meta);
@@ -58,7 +58,7 @@ public class LocalChunkTest {
   //          BatchRecord.newBuilder()
   //              .setTopicId(0)
   //              .setPartition(1)
-  //              .setSegmentIndex(2)
+  //              .setIndex(2)
   //              .setFirstOffset(200 + 2 * i);
   //      batchRecord.addRecords(
   //          Record.newBuilder().setKey("hello").setValue(ByteString.copyFromUtf8("world" + i)));
@@ -74,7 +74,7 @@ public class LocalChunkTest {
   //      Assert.assertEquals((200 + i) / 2 * 2, batchRecord.getFirstOffset() / 2 * 2);
   //      Assert.assertEquals(0, batchRecord.getTopicId());
   //      Assert.assertEquals(1, batchRecord.getPartition());
-  //      Assert.assertEquals(2, batchRecord.getSegmentIndex());
+  //      Assert.assertEquals(2, batchRecord.getIndex());
   //      Assert.assertEquals(2, batchRecord.getRecordsCount());
   //      Assert.assertEquals("hello", batchRecord.getRecords(0).getKey());
   //      Assert.assertEquals("hello", batchRecord.getRecords(1).getKey());

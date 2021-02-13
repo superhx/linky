@@ -30,9 +30,11 @@ public interface Segment extends Lifecycle {
   int NO_INDEX = -1;
   long NO_OFFSET = -1L;
 
-  CompletableFuture<AppendResult> append(AppendContext ctx, BatchRecord batchRecord);
+  CompletableFuture<AppendResult> append(AppendContext context, BatchRecord batchRecord);
 
   CompletableFuture<BatchRecord> get(long offset);
+
+  CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta);
 
   default void replicate(
       SegmentServiceProto.ReplicateRequest request,
@@ -83,15 +85,20 @@ public interface Segment extends Lifecycle {
     }
 
     private Status status = Status.SUCCESS;
+    private int index;
     private long offset;
 
-    public AppendResult(Status status, long offset) {
+    public AppendResult(Status status) {
       this.status = status;
+    }
+
+    public AppendResult(int index, long offset) {
+      this.index = index;
       this.offset = offset;
     }
 
-    public AppendResult(long offset) {
-      this.offset = offset;
+    public int getIndex() {
+      return index;
     }
 
     public long getOffset() {
@@ -104,20 +111,43 @@ public interface Segment extends Lifecycle {
   }
 
   class AppendContext {
-    private int term;
+    private static final AppendHook NOOP_HOOK = (c,b) -> {};
+    private AppendHook hook = NOOP_HOOK;
+    private int index;
+    private long offset;
 
-    public int getTerm() {
-      return term;
+    public AppendHook getHook() {
+      return hook;
     }
 
-    public void setTerm(int term) {
-      this.term = term;
+    public AppendContext setHook(AppendHook hook) {
+      this.hook = hook;
+      return this;
     }
+
+    public int getIndex() {
+      return index;
+    }
+
+    public void setIndex(int index) {
+      this.index = index;
+    }
+
+    public long getOffset() {
+      return offset;
+    }
+
+    public void setOffset(long offset) {
+      this.offset = offset;
+    }
+  }
+
+  interface AppendHook {
+    void before(AppendContext context, BatchRecord.Builder record);
   }
 
   enum Status {
     WRITABLE,
-    REPLICA_LOSS,
     REPLICA_BREAK,
     SEALED
   }

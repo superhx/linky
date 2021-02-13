@@ -16,34 +16,10 @@
  */
 package org.superhx.linky.broker.persistence;
 
-import org.superhx.linky.broker.Lifecycle;
-import org.superhx.linky.service.proto.BatchRecord;
+public class Constants {
+  public static final int INVISIBLE_FLAG = 1 << 0;
+  public static final int META_FLAG = 1 << 1;
+  public static final int TIMER_INDEX_FLAG = 1 << 2;
 
-import java.util.concurrent.CompletableFuture;
-
-public interface Chunk extends Lifecycle {
-
-  int chunkId();
-
-  CompletableFuture<Void> append(BatchRecord batchRecord);
-
-  CompletableFuture<BatchRecord> get(long offset);
-
-  CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta);
-
-  long startOffset();
-
-  long getConfirmOffset();
-
-  class AppendResult {
-    private long offset;
-
-    public AppendResult(long offset) {
-      this.offset = offset;
-    }
-
-    public long getOffset() {
-      return offset;
-    }
-  }
+  public static final long NOOP_OFFSET = -1L;
 }
