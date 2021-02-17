@@ -23,16 +23,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Lifecycle;
+import org.superhx.linky.broker.LinkyIOException;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.ChunkMeta;
 import org.superhx.linky.service.proto.SegmentMeta;
 
-import java.util.List;
-import java.util.NavigableMap;
-import java.util.Queue;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -177,6 +175,7 @@ public class LocalSegment implements Segment {
               .setIndex(index)
               .setFirstOffset(offset)
               .setStoreTimestamp(System.currentTimeMillis());
+      context.setIndex(index).setOffset(offset);
       context.getHook().before(context, batchRecordBuilder);
       batchRecord = batchRecordBuilder.build();
 
@@ -271,6 +270,27 @@ public class LocalSegment implements Segment {
   public CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta) {
     // TODO: support multiple chunk
     return lastChunk.getKV(key, meta);
+  }
+
+  @Override
+  public CompletableFuture<List<BatchRecord>> getTimerSlot(long offset) {
+    LinkedList<BatchRecord> records = new LinkedList<>();
+    try {
+      Cursor prev = new Cursor(index, offset);
+      for (; ; ) {
+        if (prev.getIndex() != index) {
+          break;
+        }
+        BatchRecord record = get(offset).get();
+        records.add(record);
+        prev = TimerUtils.getPreviousCursor(record);
+      }
+
+    } catch (Exception e) {
+      e.printStackTrace();
+      throw new LinkyIOException(e);
+    }
+    return CompletableFuture.completedFuture(records);
   }
 
   @Override

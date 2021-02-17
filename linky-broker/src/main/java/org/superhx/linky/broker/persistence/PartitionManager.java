@@ -43,6 +43,13 @@ public class PartitionManager implements Lifecycle {
 
   private LocalSegmentManager localSegmentManager;
 
+  @Override
+  public void shutdown() {
+    for (Partition partition : partitions.values()) {
+      partition.close();
+    }
+  }
+
   public CompletableFuture<OpenResponse> open(OpenRequest request) {
     PartitionMeta meta = request.getMeta();
     long topicPartition = Utils.topicPartitionId(meta.getTopicId(), meta.getPartition());

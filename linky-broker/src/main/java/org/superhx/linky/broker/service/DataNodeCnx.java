@@ -183,8 +183,11 @@ public class DataNodeCnx {
     getRecordServiceStub(meta.getAddress()).get(getRequest, responseObserver);
   }
 
-  public void redirectRecordGetKV(PartitionMeta meta, GetKVRequest getKVRequest, StreamObserver<GetKVResponse> responseObserver) {
-      getRecordServiceStub(meta.getAddress()).getKV(getKVRequest, responseObserver);
+  public void redirectRecordGetKV(
+      PartitionMeta meta,
+      GetKVRequest getKVRequest,
+      StreamObserver<GetKVResponse> responseObserver) {
+    getRecordServiceStub(meta.getAddress()).getKV(getKVRequest, responseObserver);
   }
 
   public CompletableFuture<Void> reclaim(
@@ -208,6 +211,29 @@ public class DataNodeCnx {
               public void onCompleted() {}
             });
     return rst;
+  }
+
+  public CompletableFuture<List<BatchRecord>> getTimerSlot(
+      String address, SegmentServiceProto.GetTimerSlotRequest request) {
+    CompletableFuture<List<BatchRecord>> future = new CompletableFuture<>();
+    getSegmentServiceStub(address)
+        .getTimerSlot(
+            request,
+            new StreamObserver<SegmentServiceProto.GetTimerSlotResponse>() {
+              @Override
+              public void onNext(SegmentServiceProto.GetTimerSlotResponse getTimerSlotResponse) {
+                future.complete(getTimerSlotResponse.getTimerIndexesList());
+              }
+
+              @Override
+              public void onError(Throwable throwable) {
+                future.completeExceptionally(throwable);
+              }
+
+              @Override
+              public void onCompleted() {}
+            });
+    return future;
   }
 
   public StreamObserver<PartitionManagerServiceProto.WatchRequest> watchPartition(

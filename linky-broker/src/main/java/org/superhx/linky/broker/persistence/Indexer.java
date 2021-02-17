@@ -34,7 +34,7 @@ import static org.superhx.linky.broker.persistence.ChannelFiles.NO_OFFSET;
 public class Indexer implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(Indexer.class);
   private static final String CHUNK_INDEX_COLUMN_FAMILY = "CI";
-  private static final String CHUNK_KV_COLUMN_FAMILY = "CI";
+  private static final String CHUNK_KV_COLUMN_FAMILY = "CK";
   private static final byte[] WAL_SLO_KEY = "walSlo".getBytes(Utils.DEFAULT_CHARSET);
 
   static {
@@ -50,6 +50,7 @@ public class Indexer implements Lifecycle {
   private ScheduledExecutorService forceIndexScheduler =
       Utils.newScheduledThreadPool(1, "IndexBuilderForce-");
   private RocksDB rocksDB;
+  private ColumnFamilyHandle defaultCFH;
   private ColumnFamilyHandle chunkIndexFamilyHandle;
   private ColumnFamilyHandle chunkKVFamilyHandle;
 
@@ -62,10 +63,11 @@ public class Indexer implements Lifecycle {
         Arrays.asList(
             new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOptions),
             new ColumnFamilyDescriptor(CHUNK_INDEX_COLUMN_FAMILY.getBytes(), cfOptions),
-            new ColumnFamilyDescriptor(CHUNK_INDEX_COLUMN_FAMILY.getBytes(), cfOptions));
+            new ColumnFamilyDescriptor(CHUNK_KV_COLUMN_FAMILY.getBytes(), cfOptions));
     final List<ColumnFamilyHandle> columnFamilyHandleList = new ArrayList<>();
     try {
       rocksDB = RocksDB.open(options, storePath, cfDescriptors, columnFamilyHandleList);
+      defaultCFH = columnFamilyHandleList.get(0);
       chunkIndexFamilyHandle = columnFamilyHandleList.get(1);
       chunkKVFamilyHandle = columnFamilyHandleList.get(2);
       byte[] walSloBytes = rocksDB.get(WAL_SLO_KEY);
@@ -140,8 +142,16 @@ public class Indexer implements Lifecycle {
               .setSegmentIndex(batchRecord.getIndex())
               .setCount(batchRecord.getRecordsCount())
               .setPhysicalOffset(record.getOffset())
-              .setSize(record.getSize());
-      batchRecord.getRecordsList().forEach(r -> indexBuilder.addKey(r.getKey().toByteArray()));
+              .setSize(record.getSize())
+              .setFlag(batchRecord.getFlag());
+      batchRecord
+          .getRecordsList()
+          .forEach(
+              r -> {
+                if (r.getKey() != null) {
+                  indexBuilder.addKey(r.getKey().toByteArray());
+                }
+              });
       List<Chunk> chunks =
           chunkManager.getChunks(
               batchRecord.getTopicId(), batchRecord.getPartition(), batchRecord.getIndex());
@@ -216,7 +226,9 @@ public class Indexer implements Lifecycle {
     buf.putInt(chunk.chunkId());
     buf.put(key);
     try {
-      byte[] raw = meta ? rocksDB.get(buf.array()) : rocksDB.get(chunkKVFamilyHandle, buf.array());
+
+      ColumnFamilyHandle cfh = meta ? defaultCFH : chunkKVFamilyHandle;
+      byte[] raw = rocksDB.get(cfh, buf.array());
       if (raw == null) {
         return Constants.NOOP_OFFSET;
       }
@@ -245,15 +257,25 @@ public class Indexer implements Lifecycle {
         BatchIndex batchIndex = waitingPutIndexes.take();
         // offset index
         WriteBatch indexBatch = new WriteBatch();
-        byte[] indexKey = indexKey(batchIndex);
         byte[] indexValue = indexValue(batchIndex);
-        indexBatch.put(chunkIndexFamilyHandle, indexKey, indexValue);
+        if ((batchIndex.getFlag() & Constants.LINK_FLAG) != 0) {
+          for (int i = 0; i < batchIndex.getCount(); i++) {
+            byte[] indexKey =
+                indexKey(batchIndex.getChunk().chunkId(), batchIndex.getOffset() + i, 1);
+            indexBatch.put(chunkIndexFamilyHandle, indexKey, indexValue);
+          }
+        } else {
+          byte[] indexKey = indexKey(batchIndex);
+          indexBatch.put(chunkIndexFamilyHandle, indexKey, indexValue);
+        }
         rocksDB.write(new WriteOptions(), indexBatch);
 
         // kv index
         WriteBatch kvBatch = new WriteBatch();
+        ColumnFamilyHandle cfh =
+            ((batchIndex.getFlag() & Constants.META_FLAG) != 0) ? defaultCFH : chunkKVFamilyHandle;
         for (byte[] key : batchIndex.getKeys()) {
-          kvBatch.put(chunkKVFamilyHandle, kvKey(batchIndex, key), kvValue(batchIndex));
+          kvBatch.put(cfh, kvKey(batchIndex, key), kvValue(batchIndex));
         }
         rocksDB.write(new WriteOptions(), kvBatch);
         walSlo = batchIndex.getPhysicalOffset() + batchIndex.getSize();
@@ -266,10 +288,14 @@ public class Indexer implements Lifecycle {
   }
 
   static byte[] indexKey(BatchIndex index) {
+    return indexKey(index.getChunk().chunkId(), index.getOffset(), index.getCount());
+  }
+
+  static byte[] indexKey(int chunkId, long offset, int count) {
     ByteBuffer buffer = ByteBuffer.allocate(4 + 8 + 4);
-    buffer.putInt(index.getChunk().chunkId());
-    buffer.putLong(index.getOffset());
-    buffer.putInt(index.getCount());
+    buffer.putInt(chunkId);
+    buffer.putLong(offset);
+    buffer.putInt(count);
     return buffer.array();
   }
 
@@ -315,6 +341,7 @@ public class Indexer implements Lifecycle {
     private long physicalOffset;
     private int size;
     private int count;
+    private int flag;
     private List<byte[]> keys;
     private Chunk chunk;
 
@@ -346,6 +373,10 @@ public class Indexer implements Lifecycle {
       return count;
     }
 
+    public int getFlag() {
+      return flag;
+    }
+
     public Chunk getChunk() {
       return chunk;
     }
@@ -370,6 +401,7 @@ public class Indexer implements Lifecycle {
     private int count;
     private long physicalOffset;
     private int size;
+    private int flag;
     private List<byte[]> keys;
     private Chunk chunk;
 
@@ -408,6 +440,11 @@ public class Indexer implements Lifecycle {
       return this;
     }
 
+    public Builder setFlag(int flag) {
+      this.flag = flag;
+      return this;
+    }
+
     public Builder setChunk(Chunk chunk) {
       this.chunk = chunk;
       return this;
@@ -430,6 +467,7 @@ public class Indexer implements Lifecycle {
       batchIndex.count = count;
       batchIndex.physicalOffset = physicalOffset;
       batchIndex.size = size;
+      batchIndex.flag = flag;
       batchIndex.chunk = chunk;
       batchIndex.keys = keys;
       return batchIndex;

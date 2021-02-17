@@ -27,6 +27,7 @@ import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -111,6 +112,21 @@ public class DistributedSegment implements Segment {
             });
 
     return result;
+  }
+
+  @Override
+  public CompletableFuture<List<BatchRecord>> getTimerSlot(long offset) {
+    if (localSegment != null) {
+      return localSegment.getTimerSlot(offset);
+    }
+    return dataNodeCnx.getTimerSlot(
+        address,
+        SegmentServiceProto.GetTimerSlotRequest.newBuilder()
+            .setTopicId(meta.getTopicId())
+            .setPartition(meta.getPartition())
+            .setIndex(meta.getIndex())
+            .setOffset(offset)
+            .build());
   }
 
   public CompletableFuture<BatchRecord> get0(long offset) {

@@ -62,6 +62,7 @@ public class LocalChunk implements Chunk {
             .setSegmentIndex(batchRecord.getIndex())
             .setOffset(batchRecord.getFirstOffset())
             .setCount(batchRecord.getRecordsCount())
+            .setFlag(batchRecord.getFlag())
             .setChunk(this);
     batchRecord.getRecordsList().forEach(r -> index.addKey(r.getKey().toByteArray()));
     journal.append(

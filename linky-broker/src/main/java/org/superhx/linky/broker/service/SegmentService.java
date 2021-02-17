@@ -166,6 +166,25 @@ public class SegmentService extends SegmentServiceGrpc.SegmentServiceImplBase {
     responseObserver.onCompleted();
   }
 
+  @Override
+  public void getTimerSlot(
+      SegmentServiceProto.GetTimerSlotRequest request,
+      StreamObserver<SegmentServiceProto.GetTimerSlotResponse> responseObserver) {
+    Segment segment =
+        this.localSegmentManager.getSegment(
+            request.getTopicId(), request.getPartition(), request.getIndex());
+    try {
+      responseObserver.onNext(
+          SegmentServiceProto.GetTimerSlotResponse.newBuilder()
+              .addAllTimerIndexes(segment.getTimerSlot(request.getOffset()).get())
+              .build());
+    } catch (Exception e) {
+      e.printStackTrace();
+      responseObserver.onError(e);
+    }
+    responseObserver.onCompleted();
+  }
+
   public void setLocalSegmentManager(LocalSegmentManager localSegmentManager) {
     this.localSegmentManager = localSegmentManager;
   }

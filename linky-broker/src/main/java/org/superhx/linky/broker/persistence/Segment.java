@@ -22,6 +22,7 @@ import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.SegmentMeta;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public interface Segment extends Lifecycle {
@@ -35,6 +36,8 @@ public interface Segment extends Lifecycle {
   CompletableFuture<BatchRecord> get(long offset);
 
   CompletableFuture<BatchRecord> getKV(byte[] key, boolean meta);
+
+  CompletableFuture<List<BatchRecord>> getTimerSlot(long offset);
 
   default void replicate(
       SegmentServiceProto.ReplicateRequest request,
@@ -111,7 +114,7 @@ public interface Segment extends Lifecycle {
   }
 
   class AppendContext {
-    private static final AppendHook NOOP_HOOK = (c,b) -> {};
+    private static final AppendHook NOOP_HOOK = (c, b) -> {};
     private AppendHook hook = NOOP_HOOK;
     private int index;
     private long offset;
@@ -129,16 +132,18 @@ public interface Segment extends Lifecycle {
       return index;
     }
 
-    public void setIndex(int index) {
+    public AppendContext setIndex(int index) {
       this.index = index;
+      return this;
     }
 
     public long getOffset() {
       return offset;
     }
 
-    public void setOffset(long offset) {
+    public AppendContext setOffset(long offset) {
       this.offset = offset;
+      return this;
     }
   }
 

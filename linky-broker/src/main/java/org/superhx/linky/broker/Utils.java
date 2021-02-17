@@ -16,6 +16,7 @@
  */
 package org.superhx.linky.broker;
 
+import com.google.common.io.BaseEncoding;
 import com.google.common.io.Files;
 import com.google.gson.Gson;
 import com.google.protobuf.InvalidProtocolBufferException;
@@ -26,6 +27,7 @@ import org.superhx.linky.service.proto.PartitionMeta;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.text.NumberFormat;
 import java.util.concurrent.ExecutorService;
@@ -131,5 +133,17 @@ public class Utils {
 
   public static ScheduledExecutorService newScheduledThreadPool(int size, String name) {
     return Executors.newScheduledThreadPool(size, r -> new Thread(r, name));
+  }
+
+  public static byte[] getBytes(int num) {
+    return ByteBuffer.allocate(4).putInt(num).array();
+  }
+
+  public static byte[] getBytes(long num) {
+    return ByteBuffer.allocate(8).putLong(num).array();
+  }
+
+  public static String base16(byte[] bytes) {
+    return BaseEncoding.base16().encode(bytes);
   }
 }

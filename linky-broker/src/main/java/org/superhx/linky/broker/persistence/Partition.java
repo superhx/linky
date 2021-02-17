@@ -19,7 +19,12 @@ package org.superhx.linky.broker.persistence;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
+import java.nio.ByteBuffer;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+
+import static org.superhx.linky.broker.persistence.Constants.NOOP_INDEX;
+import static org.superhx.linky.broker.persistence.Constants.NOOP_OFFSET;
 
 public interface Partition {
 
@@ -80,24 +85,27 @@ public interface Partition {
       return batchRecord;
     }
 
-    public void setBatchRecord(BatchRecord batchRecord) {
+    public GetResult setBatchRecord(BatchRecord batchRecord) {
       this.batchRecord = batchRecord;
+      return this;
     }
 
     public byte[] getNextCursor() {
       return nextCursor;
     }
 
-    public void setNextCursor(byte[] nextCursor) {
+    public GetResult setNextCursor(byte[] nextCursor) {
       this.nextCursor = nextCursor;
+      return this;
     }
 
     public GetStatus getStatus() {
       return status;
     }
 
-    public void setStatus(GetStatus status) {
+    public GetResult setStatus(GetStatus status) {
       this.status = status;
+      return this;
     }
   }
 
@@ -133,57 +141,4 @@ public interface Partition {
     ERROR
   }
 
-  class TimerIndex {
-    private long timestamp;
-    private int index;
-    private long offset;
-
-    public long getTimestamp() {
-      return timestamp;
-    }
-
-    public TimerIndex setTimestamp(long timestamp) {
-      this.timestamp = timestamp;
-      return this;
-    }
-
-    public int getIndex() {
-      return index;
-    }
-
-    public TimerIndex setIndex(int index) {
-      this.index = index;
-      return this;
-    }
-
-    public long getOffset() {
-      return offset;
-    }
-
-    public TimerIndex setOffset(long offset) {
-      this.offset = offset;
-      return this;
-    }
-  }
-
-  class Cursor {
-    private int index;
-    private long offset;
-
-    public int getIndex() {
-      return index;
-    }
-
-    public void setIndex(int index) {
-      this.index = index;
-    }
-
-    public long getOffset() {
-      return offset;
-    }
-
-    public void setOffset(long offset) {
-      this.offset = offset;
-    }
-  }
 }
