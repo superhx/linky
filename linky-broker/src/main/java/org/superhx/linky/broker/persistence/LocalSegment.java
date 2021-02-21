@@ -169,15 +169,15 @@ public class LocalSegment implements Segment {
     try {
       int recordsCount = batchRecord.getRecordsCount();
       long offset = nextOffset.getAndAdd(recordsCount);
-      BatchRecord.Builder batchRecordBuilder =
+      batchRecord =
           BatchRecord.newBuilder(batchRecord)
               .setTopicId(meta.getTopicId())
               .setIndex(index)
               .setFirstOffset(offset)
-              .setStoreTimestamp(System.currentTimeMillis());
+              .setStoreTimestamp(System.currentTimeMillis())
+              .build();
       context.setIndex(index).setOffset(offset);
-      context.getHook().before(context, batchRecordBuilder);
-      batchRecord = batchRecordBuilder.build();
+      context.getHook().before(context, batchRecord);
 
       CompletableFuture<Void> localWriteFuture = getLastChunk().append(batchRecord);
       waitConfirmRequests.add(new Waiting(offset, rst, new AppendResult(index, offset)));
@@ -281,7 +281,7 @@ public class LocalSegment implements Segment {
         if (prev.getIndex() != index) {
           break;
         }
-        BatchRecord record = get(offset).get();
+        BatchRecord record = get(prev.getOffset()).get();
         records.add(record);
         prev = TimerUtils.getPreviousCursor(record);
       }
@@ -306,6 +306,16 @@ public class LocalSegment implements Segment {
   @Override
   public void setEndOffset(long offset) {
     this.endOffset = offset;
+  }
+
+  @Override
+  public long getConfirmOffset() {
+    return this.confirmOffset;
+  }
+
+  @Override
+  public long getNextOffset() {
+    return this.nextOffset.get();
   }
 
   @Override

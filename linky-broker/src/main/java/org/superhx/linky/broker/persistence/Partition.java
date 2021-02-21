@@ -20,6 +20,7 @@ import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
@@ -32,6 +33,8 @@ public interface Partition {
 
   CompletableFuture<GetResult> get(byte[] cursor);
 
+  CompletableFuture<GetResult> get(byte[] cursor, boolean skipInvisible);
+
   CompletableFuture<GetKVResult> getKV(byte[] key, boolean meta);
 
   CompletableFuture<PartitionStatus> open();
@@ -40,7 +43,21 @@ public interface Partition {
 
   PartitionStatus status();
 
+  Cursor getNextCursor();
+
+
+  CompletableFuture<List<TimerIndex>> getTimerSlot(Cursor cursor);
+
   PartitionMeta meta();
+
+  String name();
+
+  byte[] getMeta(byte[] key);
+
+  CompletableFuture<Void> setMeta(byte[]... kv);
+
+
+  AppendPipeline appendPipeline();
 
   enum AppendStatus {
     SUCCESS,

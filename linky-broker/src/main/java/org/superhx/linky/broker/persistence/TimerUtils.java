@@ -16,9 +16,16 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
 
+import java.nio.ByteBuffer;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Optional;
+
+import static org.superhx.linky.broker.persistence.Constants.TIMER_SLOT_RECORD_HEADER;
+import static org.superhx.linky.broker.persistence.Constants.TIMER_SLOT_SEGMENT_KEY_PREFIX;
 
 public class TimerUtils {
   public static Cursor getPreviousCursor(BatchRecord batchRecord) {
@@ -26,5 +33,34 @@ public class TimerUtils {
         .map(r -> r.getHeadersOrDefault(Constants.TIMER_PRE_CURSOR_HEADER, null))
         .map(b -> Cursor.get(b.toByteArray()))
         .orElse(Cursor.NOOP);
+  }
+
+  public static List<TimerIndex> getTimerIndexes(BatchRecord batchRecord) {
+    List<TimerIndex> timerIndexes = new LinkedList<>();
+    timerIndexes.add(
+        new TimerIndex()
+            .setIndex(batchRecord.getIndex())
+            .setOffset(batchRecord.getFirstOffset())
+            .setTimestamp(batchRecord.getVisibleTimestamp())
+            .setNext(
+                new Cursor(
+                    batchRecord.getIndex(),
+                    batchRecord.getFirstOffset() + batchRecord.getRecordsCount())));
+    return timerIndexes;
+  }
+
+  public static int getSlot(BatchRecord batchRecord) {
+    return Utils.getInt(
+        batchRecord
+            .getRecords(0)
+            .getHeadersOrDefault(TIMER_SLOT_RECORD_HEADER, null)
+            .toByteArray());
+  }
+
+  public static byte[] getTimerSlotSegmentKey(int slotSegment) {
+    return ByteBuffer.allocate(TIMER_SLOT_SEGMENT_KEY_PREFIX.length + 4)
+        .put(TIMER_SLOT_SEGMENT_KEY_PREFIX)
+        .putInt(slotSegment)
+        .array();
   }
 }

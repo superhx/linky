@@ -200,6 +200,22 @@ public class DistributedSegment implements Segment {
   }
 
   @Override
+  public long getConfirmOffset() {
+    if (isSealed() || localSegment == null) {
+      return this.meta.getEndOffset();
+    }
+    return localSegment.getConfirmOffset();
+  }
+
+  @Override
+  public long getNextOffset() {
+    if (localSegment != null) {
+      return localSegment.getNextOffset();
+    }
+    return this.meta.getEndOffset();
+  }
+
+  @Override
   public CompletableFuture<Void> reclaimSpace(long offset) {
     SegmentServiceProto.ReclaimRequest request =
         SegmentServiceProto.ReclaimRequest.newBuilder()

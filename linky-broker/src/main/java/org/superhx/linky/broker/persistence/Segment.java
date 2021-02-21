@@ -61,6 +61,10 @@ public interface Segment extends Lifecycle {
    */
   void setEndOffset(long offset);
 
+  long getConfirmOffset();
+
+  long getNextOffset();
+
   /**
    * reclaim space before exclusive offset
    *
@@ -114,7 +118,15 @@ public interface Segment extends Lifecycle {
   }
 
   class AppendContext {
-    private static final AppendHook NOOP_HOOK = (c, b) -> {};
+    private static final AppendHook NOOP_HOOK =
+        new AppendHook() {
+          @Override
+          public void before(AppendContext context, BatchRecord record) {}
+
+          @Override
+          public void after(AppendContext context, BatchRecord record) {}
+        };
+
     private AppendHook hook = NOOP_HOOK;
     private int index;
     private long offset;
@@ -148,7 +160,9 @@ public interface Segment extends Lifecycle {
   }
 
   interface AppendHook {
-    void before(AppendContext context, BatchRecord.Builder record);
+    default void before(AppendContext context, BatchRecord record) {}
+
+    default void after(AppendContext context, BatchRecord record) {}
   }
 
   enum Status {

@@ -22,7 +22,7 @@ import java.util.Objects;
 import static org.superhx.linky.broker.persistence.Constants.NOOP_INDEX;
 import static org.superhx.linky.broker.persistence.Constants.NOOP_OFFSET;
 
-public class Cursor {
+public class Cursor implements Comparable<Cursor> {
   public static final Cursor NOOP = new Cursor(NOOP_INDEX, NOOP_OFFSET);
   private int index;
   private long offset;
@@ -79,5 +79,16 @@ public class Cursor {
     cursor.index = buf.getInt();
     cursor.offset = buf.getLong();
     return cursor;
+  }
+
+  @Override
+  public int compareTo(Cursor o) {
+    if (o == null) {
+      return 1;
+    }
+    if (index != o.index) {
+      return index - o.index;
+    }
+    return Long.compare(offset, o.offset);
   }
 }

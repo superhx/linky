@@ -21,11 +21,14 @@ import java.util.LinkedList;
 import java.util.List;
 
 import static org.superhx.linky.broker.persistence.Constants.TIMER_INDEX_SIZE;
+import static org.superhx.linky.broker.persistence.Constants.TIMER_LINK_SIZE;
 
 public class TimerIndex {
   private long timestamp;
   private int index;
   private long offset;
+  private Cursor next;
+  private Cursor cursor;
 
   public TimerIndex(long timestamp, int index, long offset) {
     this.timestamp = timestamp / 1000 * 1000;
@@ -62,6 +65,30 @@ public class TimerIndex {
     return this;
   }
 
+  public Cursor getNext() {
+    return next;
+  }
+
+  public TimerIndex setNext(Cursor next) {
+    this.next = next;
+    return this;
+  }
+
+  public Cursor getCursor() {
+    if (cursor == null) {
+      cursor = new Cursor(index, offset);
+    }
+    return cursor;
+  }
+
+  public byte[] toLinkBytes() {
+    byte[] indexesBytes = new byte[TIMER_LINK_SIZE];
+    ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
+    indexesBuf.putInt(index);
+    indexesBuf.putLong(offset);
+    return indexesBytes;
+  }
+
   @Override
   public String toString() {
     return "TimerIndex{timestamp=" + timestamp + ",index=" + index + ",offset=" + offset + "}";
@@ -81,6 +108,16 @@ public class TimerIndex {
     ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
     for (TimerIndex timerIndex : indexes) {
       indexesBuf.putLong(timerIndex.getTimestamp());
+      indexesBuf.putInt(timerIndex.getIndex());
+      indexesBuf.putLong(timerIndex.getOffset());
+    }
+    return indexesBytes;
+  }
+
+  public static byte[] toLinkBytes(List<TimerIndex> indexes) {
+    byte[] indexesBytes = new byte[indexes.size() * TIMER_LINK_SIZE];
+    ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
+    for (TimerIndex timerIndex : indexes) {
       indexesBuf.putInt(timerIndex.getIndex());
       indexesBuf.putLong(timerIndex.getOffset());
     }

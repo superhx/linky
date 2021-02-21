@@ -143,6 +143,14 @@ public class Utils {
     return ByteBuffer.allocate(8).putLong(num).array();
   }
 
+  public static int getInt(byte[] bytes) {
+    return ByteBuffer.wrap(bytes).getInt();
+  }
+
+  public static long getLong(byte[] bytes) {
+    return ByteBuffer.wrap(bytes).getLong();
+  }
+
   public static String base16(byte[] bytes) {
     return BaseEncoding.base16().encode(bytes);
   }
