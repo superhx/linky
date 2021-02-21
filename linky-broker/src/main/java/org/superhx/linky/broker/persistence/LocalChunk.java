@@ -112,7 +112,7 @@ public class LocalChunk implements Chunk {
     if (batchIndex == null) {
       return 0;
     }
-    return batchIndex.getOffset() + batchIndex.getCount();
+    return batchIndex.getOffset() + 1;
   }
 
   //

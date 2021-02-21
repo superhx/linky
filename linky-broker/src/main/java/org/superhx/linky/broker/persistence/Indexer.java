@@ -242,7 +242,6 @@ public class Indexer implements Lifecycle {
     ByteBuffer buffer = ByteBuffer.wrap(key);
     buffer.getInt();
     index.offset = buffer.getLong();
-    index.count = buffer.getInt();
   }
 
   static void fillValue(BatchIndex index, byte[] value) {
@@ -260,8 +259,7 @@ public class Indexer implements Lifecycle {
         byte[] indexValue = indexValue(batchIndex);
         if ((batchIndex.getFlag() & Constants.LINK_FLAG) != 0) {
           for (int i = 0; i < batchIndex.getCount(); i++) {
-            byte[] indexKey =
-                indexKey(batchIndex.getChunk().chunkId(), batchIndex.getOffset() + i, 1);
+            byte[] indexKey = indexKey(batchIndex.getChunk().chunkId(), batchIndex.getOffset() + i);
             indexBatch.put(chunkIndexFamilyHandle, indexKey, indexValue);
           }
         } else {
@@ -288,14 +286,13 @@ public class Indexer implements Lifecycle {
   }
 
   static byte[] indexKey(BatchIndex index) {
-    return indexKey(index.getChunk().chunkId(), index.getOffset(), index.getCount());
+    return indexKey(index.getChunk().chunkId(), index.getOffset());
   }
 
-  static byte[] indexKey(int chunkId, long offset, int count) {
+  static byte[] indexKey(int chunkId, long offset) {
     ByteBuffer buffer = ByteBuffer.allocate(4 + 8 + 4);
     buffer.putInt(chunkId);
     buffer.putLong(offset);
-    buffer.putInt(count);
     return buffer.array();
   }
 
@@ -471,32 +468,6 @@ public class Indexer implements Lifecycle {
       batchIndex.chunk = chunk;
       batchIndex.keys = keys;
       return batchIndex;
-    }
-  }
-
-  static class Checkpoint {
-    private String path;
-    private long walLso;
-
-    public long getWalLso() {
-      return walLso;
-    }
-
-    public void setWalLso(long walLso) {
-      this.walLso = walLso;
-    }
-
-    public void persist() {
-      Utils.jsonObj2file(this, path);
-    }
-
-    public static Checkpoint load(String path) {
-      Checkpoint checkpoint = Utils.file2jsonObj(path, Checkpoint.class);
-      if (checkpoint == null) {
-        checkpoint = new Checkpoint();
-      }
-      checkpoint.path = path;
-      return checkpoint;
     }
   }
 }

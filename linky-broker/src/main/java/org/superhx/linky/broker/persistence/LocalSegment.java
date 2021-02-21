@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.BrokerContext;
 import org.superhx.linky.broker.Lifecycle;
 import org.superhx.linky.broker.LinkyIOException;
+import org.superhx.linky.broker.Utils;
 import org.superhx.linky.broker.service.DataNodeCnx;
 import org.superhx.linky.data.service.proto.SegmentServiceProto;
 import org.superhx.linky.service.proto.BatchRecord;
@@ -167,8 +168,8 @@ public class LocalSegment implements Segment {
       return CompletableFuture.completedFuture(new AppendResult(SEALED));
     }
     try {
-      int recordsCount = batchRecord.getRecordsCount();
-      long offset = nextOffset.getAndAdd(recordsCount);
+      int offsetCount = Utils.getOffsetCount(batchRecord);
+      long offset = nextOffset.getAndAdd(offsetCount);
       batchRecord =
           BatchRecord.newBuilder(batchRecord)
               .setTopicId(meta.getTopicId())
@@ -192,14 +193,14 @@ public class LocalSegment implements Segment {
 
       localWriteFuture.thenAccept(
           r -> {
-            this.confirmOffset = offset + recordsCount;
+            this.confirmOffset = offset + offsetCount;
             checkWaiting();
           });
       return rst.thenApply(
           r -> {
             switch (r.getStatus()) {
               case SUCCESS:
-                commitOffset = r.getOffset() + recordsCount;
+                commitOffset = r.getOffset() + offsetCount;
             }
             return r;
           });
@@ -241,7 +242,7 @@ public class LocalSegment implements Segment {
       return;
     }
     commitOffset = request.getCommitOffset();
-    long replicaConfirmOffset = nextOffset.addAndGet(batchRecord.getRecordsCount());
+    long replicaConfirmOffset = nextOffset.addAndGet(Utils.getOffsetCount(batchRecord));
     getLastChunk()
         .append(batchRecord)
         .thenAccept(
@@ -541,7 +542,7 @@ public class LocalSegment implements Segment {
             TextFormat.shortDebugString(request));
       }
       follower.onNext(request.build());
-      expectedNextOffset += request.getBatchRecord().getRecordsCount();
+      expectedNextOffset += Utils.getOffsetCount(request.getBatchRecord());
     }
 
     public synchronized void catchup() {

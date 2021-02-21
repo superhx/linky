@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class Client {
-  static int count = 1;
+  static int count = 0;
 
   public static void main(String... args) throws InterruptedException {
     ManagedChannel channel =
@@ -44,7 +44,7 @@ public class Client {
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
-//              .setVisibleTimestamp(System.currentTimeMillis() + 5000)
+              .setVisibleTimestamp(System.currentTimeMillis() + 5000)
               .addRecords(
                   Record.newBuilder()
                       .setKey(ByteString.copyFrom("rk", Charset.forName("UTF-8")))
@@ -85,54 +85,54 @@ public class Client {
         getkv(stub, "rk");
     //    getkv(stub, "rk1");
 
-//    AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
-//    final boolean[] end = {false};
-//    for (int i = 0; i < 100; i++) {
-//      if (end[0]) {
-//        break;
-//      }
-//      CountDownLatch getLatch = new CountDownLatch(1);
-//      stub.get(
-//          GetRequest.newBuilder()
-//              .setTopic("FOO")
-//              .setPartition(0)
-//              .setCursor(ByteString.copyFrom(cursor.get()))
-//              .build(),
-//          new StreamObserver<GetResponse>() {
-//            @Override
-//            public void onNext(GetResponse getResponse) {
-//              if (getResponse.getStatus() == GetResponse.Status.NO_NEW_MSG) {
-//                end[0] = true;
-//                return;
-//              }
-//              ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
-//              System.out.println(
-//                  "Get return offset:"
-//                      + getResponse.getBatchRecord().getFirstOffset()
-//                      + " count:"
-//                      + getResponse.getBatchRecord().getRecordsCount()
-//                      + " next: seg "
-//                      + buf.getInt()
-//                      + " segOffset "
-//                      + buf.getLong()
-//                      + " body"
-//                      + TextFormat.shortDebugString(getResponse.getBatchRecord()));
-//              cursor.set(buf.array());
-//            }
-//
-//            @Override
-//            public void onError(Throwable throwable) {
-//              throwable.printStackTrace();
-//            }
-//
-//            @Override
-//            public void onCompleted() {
-//              getLatch.countDown();
-//            }
-//          });
-//      getLatch.await();
-//    }
-//    channel.shutdownNow().awaitTermination(1, TimeUnit.SECONDS);
+    AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
+    final boolean[] end = {false};
+    for (int i = 0; i < 100; i++) {
+      if (end[0]) {
+        break;
+      }
+      CountDownLatch getLatch = new CountDownLatch(1);
+      stub.get(
+          GetRequest.newBuilder()
+              .setTopic("FOO")
+              .setPartition(0)
+              .setCursor(ByteString.copyFrom(cursor.get()))
+              .build(),
+          new StreamObserver<GetResponse>() {
+            @Override
+            public void onNext(GetResponse getResponse) {
+              if (getResponse.getStatus() == GetResponse.Status.NO_NEW_MSG) {
+                end[0] = true;
+                return;
+              }
+              ByteBuffer buf = ByteBuffer.wrap(getResponse.getNextCursor().toByteArray());
+              System.out.println(
+                  "Get return offset:"
+                      + getResponse.getBatchRecord().getFirstOffset()
+                      + " count:"
+                      + getResponse.getBatchRecord().getRecordsCount()
+                      + " next: seg "
+                      + buf.getInt()
+                      + " segOffset "
+                      + buf.getLong()
+                      + " body"
+                      + TextFormat.shortDebugString(getResponse.getBatchRecord()));
+              cursor.set(buf.array());
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+              throwable.printStackTrace();
+            }
+
+            @Override
+            public void onCompleted() {
+              getLatch.countDown();
+            }
+          });
+      getLatch.await();
+    }
+    channel.shutdownNow().awaitTermination(1, TimeUnit.SECONDS);
   }
 //
   private static void getkv(RecordServiceGrpc.RecordServiceStub stub, String key)

@@ -83,6 +83,7 @@ public class LocalPartitionImpl implements Partition {
   public CompletableFuture<AppendResult> append0(
       Segment segment, Segment.AppendContext context, BatchRecord batchRecord) {
     BatchRecord.Builder batchRecordBuilder = batchRecord.toBuilder();
+    int offsetCount = Utils.getOffsetCount(batchRecord);
     TimerIndex timerIndex = new TimerIndex().setTimestamp(batchRecord.getVisibleTimestamp());
     timer.transform(batchRecordBuilder);
     if (log.isDebugEnabled()) {
@@ -90,7 +91,6 @@ public class LocalPartitionImpl implements Partition {
     }
     appendLock.lock();
     try {
-
       return segment
           .append(context, batchRecordBuilder.build())
           .thenApply(
@@ -102,8 +102,7 @@ public class LocalPartitionImpl implements Partition {
                         .setIndex(appendResult.getIndex())
                         .setNext(
                             new Cursor(
-                                appendResult.getIndex(),
-                                appendResult.getOffset() + batchRecord.getRecordsCount()));
+                                appendResult.getIndex(), appendResult.getOffset() + offsetCount));
                     timer.asyncBuildTimerIndex(timerIndex);
                     ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
                     cursor.putInt(appendResult.getIndex());
@@ -118,6 +117,7 @@ public class LocalPartitionImpl implements Partition {
     }
   }
 
+  @Override
   public byte[] getMeta(byte[] key) {
     try {
       GetKVResult getKVResult = getKV(key, true).get();
@@ -294,7 +294,8 @@ public class LocalPartitionImpl implements Partition {
     }
     ByteBuffer nextCursor = ByteBuffer.allocate(4 + 8);
     nextCursor.putInt(segmentIndex);
-    long finalOffset = offset;
+    long nextOffset = offset + 1;
+    nextCursor.putLong(nextOffset);
     int finalSegmentIndex = segmentIndex;
     return recordFuture.thenCompose(
         r -> {
@@ -306,24 +307,20 @@ public class LocalPartitionImpl implements Partition {
             if ((r.getFlag() & Constants.LINK_FLAG) != 0) {
               Cursor linkedCursor =
                   Cursor.get(
-                      r.getRecords((int) (finalOffset - r.getFirstOffset()))
+                      r.getRecords((int) (nextOffset - 1 - r.getFirstOffset()))
                           .getValue()
                           .toByteArray());
-              nextCursor.putLong(finalOffset + r.getRecordsCount());
               return get(linkedCursor.toBytes(), false)
                   .thenApply(linkedGetResult -> linkedGetResult.setNextCursor(nextCursor.array()));
             }
 
             if (skipInvisible) {
               if ((r.getFlag() & INVISIBLE_FLAG) != 0) {
-                return get(
-                    new Cursor(finalSegmentIndex, finalOffset + r.getRecordsCount()).toBytes(),
-                    true);
+                return get(new Cursor(finalSegmentIndex, nextOffset).toBytes(), true);
               }
             }
 
             getResult.setBatchRecord(r);
-            nextCursor.putLong(finalOffset + r.getRecordsCount());
             getResult.setNextCursor(nextCursor.array());
             return CompletableFuture.completedFuture(getResult);
           }

@@ -45,7 +45,7 @@ public class TimerUtils {
             .setNext(
                 new Cursor(
                     batchRecord.getIndex(),
-                    batchRecord.getFirstOffset() + batchRecord.getRecordsCount())));
+                    batchRecord.getFirstOffset() + Utils.getOffsetCount(batchRecord))));
     return timerIndexes;
   }
 

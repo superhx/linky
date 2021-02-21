@@ -22,6 +22,8 @@ import com.google.gson.Gson;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.MessageOrBuilder;
 import com.google.protobuf.util.JsonFormat;
+import org.superhx.linky.broker.persistence.Constants;
+import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.NodeMeta;
 import org.superhx.linky.service.proto.PartitionMeta;
 
@@ -125,6 +127,10 @@ public class Utils {
         .setEpoch(meta.getEpoch())
         .setStatus(NodeMeta.Status.ONLINE)
         .build();
+  }
+
+  public static int getOffsetCount(BatchRecord batchRecord) {
+    return ((batchRecord.getFlag() & Constants.LINK_FLAG) == 0) ? 1 : batchRecord.getRecordsCount();
   }
 
   public static ExecutorService newFixedThreadPool(int size, String name) {
