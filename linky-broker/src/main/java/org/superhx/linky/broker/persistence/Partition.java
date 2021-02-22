@@ -19,13 +19,8 @@ package org.superhx.linky.broker.persistence;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
-import java.nio.ByteBuffer;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-
-import static org.superhx.linky.broker.persistence.Constants.NOOP_INDEX;
-import static org.superhx.linky.broker.persistence.Constants.NOOP_OFFSET;
 
 public interface Partition {
 

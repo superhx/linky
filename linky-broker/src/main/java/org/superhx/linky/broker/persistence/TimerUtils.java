@@ -16,16 +16,16 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import com.google.protobuf.ByteString;
 import org.superhx.linky.broker.Utils;
 import org.superhx.linky.service.proto.BatchRecord;
+import org.superhx.linky.service.proto.BatchRecordOrBuilder;
 
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
 
-import static org.superhx.linky.broker.persistence.Constants.TIMER_SLOT_RECORD_HEADER;
-import static org.superhx.linky.broker.persistence.Constants.TIMER_SLOT_SEGMENT_KEY_PREFIX;
+import static org.superhx.linky.broker.persistence.Constants.*;
 
 public class TimerUtils {
   public static Cursor getPreviousCursor(BatchRecord batchRecord) {
@@ -35,18 +35,77 @@ public class TimerUtils {
         .orElse(Cursor.NOOP);
   }
 
-  public static List<TimerIndex> getTimerIndexes(BatchRecord batchRecord) {
-    List<TimerIndex> timerIndexes = new LinkedList<>();
-    timerIndexes.add(
-        new TimerIndex()
-            .setIndex(batchRecord.getIndex())
-            .setOffset(batchRecord.getFirstOffset())
-            .setTimestamp(batchRecord.getVisibleTimestamp())
-            .setNext(
-                new Cursor(
-                    batchRecord.getIndex(),
-                    batchRecord.getFirstOffset() + Utils.getOffsetCount(batchRecord))));
-    return timerIndexes;
+  public static TimerIndex getTimerIndex(BatchRecordOrBuilder batchRecord) {
+    TimerIndex timerIndex = new TimerIndex();
+    if (isTimerCommit(batchRecord)) {
+      ByteString timestampBytes =
+          batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TIMESTAMP_HEADER, null);
+      long timestamp = Utils.getLong(timestampBytes.toByteArray());
+      timerIndex.setSlot(slot(timestamp));
+      byte[] timerIndexBytes = batchRecord.getRecords(0).getValue().toByteArray();
+      timerIndex.setIndexes(timerIndexBytes);
+    } else if (Flag.isTimer(batchRecord.getFlag())) {
+      timerIndex.setSlot(slot(batchRecord.getVisibleTimestamp()));
+    }
+    return timerIndex;
+  }
+
+  public static TimerIndex transformTimerIndexRecord2TimerIndex(BatchRecordOrBuilder batchRecord) {
+    ByteString slotBytes =
+        batchRecord.getRecords(0).getHeadersOrDefault(TIMER_SLOT_RECORD_HEADER, null);
+    int slot = Utils.getInt(slotBytes.toByteArray());
+    TimerIndex timerIndex = new TimerIndex();
+    timerIndex.setIndexes(batchRecord.getRecords(0).getValue().toByteArray());
+    timerIndex.setSlot(slot);
+    timerIndex.setCursor(batchRecord.getIndex(), batchRecord.getFirstOffset());
+    timerIndex.setNext(new Cursor(batchRecord.getIndex(), batchRecord.getFirstOffset() + 1));
+    return timerIndex;
+  }
+
+  public static byte[] getTimerIndexBytes(long timestamp, int index, long offset) {
+    ByteBuffer indexesBuf = ByteBuffer.allocate(TIMER_INDEX_SIZE);
+    indexesBuf.putLong(timestamp);
+    indexesBuf.putInt(index);
+    indexesBuf.putLong(offset);
+    return indexesBuf.array();
+  }
+
+  public static byte[] toTimerIndexBytes(List<TimerIndex> timeIndexes) {
+    if (timeIndexes.size() == 0) {
+      return new byte[0];
+    }
+    int sum = timeIndexes.stream().mapToInt(t -> t.count()).sum();
+    ByteBuffer buf = ByteBuffer.allocate(sum * Constants.TIMER_INDEX_SIZE);
+    for (TimerIndex timerIndex : timeIndexes) {
+      timerIndex.drainAsTimerIndex(buf);
+    }
+    return buf.array();
+  }
+
+  public static int slot(long timestamp) {
+    if (timestamp == 0) {
+      return -1;
+    }
+    return (int) ((timestamp / 1000) % TIMER_WINDOW);
+  }
+
+  public static boolean isTimerCommit(BatchRecordOrBuilder batchRecord) {
+    if ((batchRecord.getFlag() & TIMER_FLAG) == 0) {
+      return false;
+    }
+    if (batchRecord.getRecordsCount() == 0) {
+      return false;
+    }
+    return TIMER_COMMIT_TYPE.equals(
+        batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null));
+  }
+
+  public static boolean isTimerIndex(BatchRecordOrBuilder batchRecord) {
+    if ((batchRecord.getFlag() & TIMER_FLAG) == 0) {
+      return false;
+    }
+    return TIMER_INDEX_TYPE.equals(
+        batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null));
   }
 
   public static int getSlot(BatchRecord batchRecord) {

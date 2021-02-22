@@ -44,7 +44,7 @@ public class Client {
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
-              .setVisibleTimestamp(System.currentTimeMillis() + 5000)
+              .setVisibleTimestamp(System.currentTimeMillis() + 10000)
               .addRecords(
                   Record.newBuilder()
                       .setKey(ByteString.copyFrom("rk", Charset.forName("UTF-8")))

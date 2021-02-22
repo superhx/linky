@@ -84,8 +84,8 @@ public class LocalPartitionImpl implements Partition {
       Segment segment, Segment.AppendContext context, BatchRecord batchRecord) {
     BatchRecord.Builder batchRecordBuilder = batchRecord.toBuilder();
     int offsetCount = Utils.getOffsetCount(batchRecord);
-    TimerIndex timerIndex = new TimerIndex().setTimestamp(batchRecord.getVisibleTimestamp());
-    timer.transform(batchRecordBuilder);
+    long timestamp = batchRecordBuilder.getVisibleTimestamp();
+    TimerIndex timerIndex = timer.transform(batchRecordBuilder);
     if (log.isDebugEnabled()) {
       log.debug("[PARTITION_APPEND]{}", TextFormat.shortDebugString(batchRecord));
     }
@@ -98,8 +98,8 @@ public class LocalPartitionImpl implements Partition {
                 switch (appendResult.getStatus()) {
                   case SUCCESS:
                     timerIndex
-                        .setOffset(appendResult.getOffset())
-                        .setIndex(appendResult.getIndex())
+                        .setCursor(appendResult.getIndex(), appendResult.getOffset())
+                        .setTimerIndex(timestamp, appendResult.getIndex(), appendResult.getOffset())
                         .setNext(
                             new Cursor(
                                 appendResult.getIndex(), appendResult.getOffset() + offsetCount));
@@ -479,8 +479,7 @@ public class LocalPartitionImpl implements Partition {
             return CompletableFuture.completedFuture(null);
           }
           for (BatchRecord record : records) {
-            timerIndexes.addAll(
-                TimerIndex.getTimerIndexes(record.getRecords(0).getValue().toByteArray()));
+            timerIndexes.add(TimerUtils.transformTimerIndexRecord2TimerIndex(record));
           }
           Cursor prev = TimerUtils.getPreviousCursor(records.get(records.size() - 1));
           if (Cursor.NOOP.equals(prev)) {

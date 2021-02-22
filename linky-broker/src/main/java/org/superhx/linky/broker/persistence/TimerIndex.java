@@ -17,110 +17,88 @@
 package org.superhx.linky.broker.persistence;
 
 import java.nio.ByteBuffer;
-import java.util.LinkedList;
 import java.util.List;
 
 import static org.superhx.linky.broker.persistence.Constants.TIMER_INDEX_SIZE;
-import static org.superhx.linky.broker.persistence.Constants.TIMER_LINK_SIZE;
 
 public class TimerIndex {
-  private long timestamp;
-  private int index;
-  private long offset;
-  private Cursor next;
   private Cursor cursor;
+  private Cursor next;
+  private int slot = -1;
+  private byte[] indexes;
 
-  public TimerIndex(long timestamp, int index, long offset) {
-    this.timestamp = timestamp / 1000 * 1000;
-    this.index = index;
-    this.offset = offset;
+  public boolean isTimer() {
+    return slot >= 0;
   }
 
-  public TimerIndex() {}
-
-  public long getTimestamp() {
-    return timestamp;
+  public void setSlot(int slot) {
+    this.slot = slot;
   }
 
-  public TimerIndex setTimestamp(long timestamp) {
-    this.timestamp = timestamp;
-    return this;
-  }
-
-  public int getIndex() {
-    return index;
-  }
-
-  public TimerIndex setIndex(int index) {
-    this.index = index;
-    return this;
-  }
-
-  public long getOffset() {
-    return offset;
-  }
-
-  public TimerIndex setOffset(long offset) {
-    this.offset = offset;
-    return this;
+  public int getSlot() {
+    return slot;
   }
 
   public Cursor getNext() {
     return next;
   }
 
-  public TimerIndex setNext(Cursor next) {
+  public void setNext(Cursor next) {
     this.next = next;
+  }
+
+  public int count() {
+    return indexes.length / TIMER_INDEX_SIZE;
+  }
+
+  public void setIndexes(byte[] indexes) {
+    this.indexes = indexes;
+  }
+
+  public TimerIndex setCursor(int index, long offset) {
+    cursor = new Cursor(index, offset);
+    return this;
+  }
+
+  public TimerIndex setTimerIndex(long timestamp, int index, long offset) {
+    if (isTimer()) {
+      indexes = TimerUtils.getTimerIndexBytes(timestamp, index, offset);
+    }
     return this;
   }
 
   public Cursor getCursor() {
-    if (cursor == null) {
-      cursor = new Cursor(index, offset);
-    }
     return cursor;
   }
 
-  public byte[] toLinkBytes() {
-    byte[] indexesBytes = new byte[TIMER_LINK_SIZE];
-    ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
-    indexesBuf.putInt(index);
-    indexesBuf.putLong(offset);
-    return indexesBytes;
-  }
-
-  @Override
-  public String toString() {
-    return "TimerIndex{timestamp=" + timestamp + ",index=" + index + ",offset=" + offset + "}";
-  }
-
-  public static List<TimerIndex> getTimerIndexes(byte[] bytes) {
-    ByteBuffer buf = ByteBuffer.wrap(bytes);
-    List<TimerIndex> timerIndexes = new LinkedList<>();
-    for (int i = 0; i < bytes.length; i += 8 + 4 + 8) {
-      timerIndexes.add(new TimerIndex(buf.getLong(), buf.getInt(), buf.getLong()));
+  public void drainAsTimerIndex(ByteBuffer buf) {
+    if (indexes == null) {
+      return;
     }
-    return timerIndexes;
+    buf.put(indexes);
   }
 
-  public static byte[] toBytes(List<TimerIndex> indexes) {
-    byte[] indexesBytes = new byte[indexes.size() * TIMER_INDEX_SIZE];
-    ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
-    for (TimerIndex timerIndex : indexes) {
-      indexesBuf.putLong(timerIndex.getTimestamp());
-      indexesBuf.putInt(timerIndex.getIndex());
-      indexesBuf.putLong(timerIndex.getOffset());
+  public void split(long timestamp, List<TimerIndex> matched, List<TimerIndex> unmatched) {
+    if (indexes == null) {
+      return;
     }
-    return indexesBytes;
+    ByteBuffer buf = ByteBuffer.wrap(indexes);
+    for (int i = 0; i < count(); i++) {
+      long tim = buf.getLong() / 1000 * 1000;
+      int index = buf.getInt();
+      long offset = buf.getLong();
+      TimerIndex timerIndex = new TimerIndex();
+      timerIndex.setSlot(slot);
+      timerIndex.setTimerIndex(tim, index, offset);
+      if (tim <= timestamp) {
+        matched.add(timerIndex);
+      } else {
+        unmatched.add(timerIndex);
+      }
+    }
   }
 
-  public static byte[] toLinkBytes(List<TimerIndex> indexes) {
-    byte[] indexesBytes = new byte[indexes.size() * TIMER_LINK_SIZE];
-    ByteBuffer indexesBuf = ByteBuffer.wrap(indexesBytes);
-    for (TimerIndex timerIndex : indexes) {
-      indexesBuf.putInt(timerIndex.getIndex());
-      indexesBuf.putLong(timerIndex.getOffset());
-    }
-    return indexesBytes;
+  public byte[] getTimerIndexBytes() {
+    return indexes;
   }
 }

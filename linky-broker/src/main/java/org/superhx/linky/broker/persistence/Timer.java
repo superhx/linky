@@ -110,6 +110,7 @@ class Timer implements Lifecycle {
                     Utils.getBytes(timerNextTimestamp)));
   }
 
+  // TODO: async enable
   private synchronized void enableTimer() throws Exception {
     if (timerEnable) {
       return;
@@ -133,12 +134,12 @@ class Timer implements Lifecycle {
         .get();
   }
 
-  public void transform(BatchRecord.Builder batchRecord) {
+  public TimerIndex transform(BatchRecord.Builder batchRecord) {
     long timestampBarrier = this.timestampBarrier;
     long visibleTimestamp =
         (batchRecord.getVisibleTimestamp() - TIMESTAMP_BARRIER_SAFE_WINDOW) / 1000 * 1000;
     if (visibleTimestamp <= 0) {
-      return;
+      return TimerUtils.getTimerIndex(batchRecord);
     }
     if (!timerEnable) {
       try {
@@ -148,9 +149,10 @@ class Timer implements Lifecycle {
       }
     }
     if (visibleTimestamp <= timestampBarrier) {
-      return;
+      return TimerUtils.getTimerIndex(batchRecord);
     }
     batchRecord.setFlag(batchRecord.getFlag() | INVISIBLE_FLAG | TIMER_FLAG);
+    return TimerUtils.getTimerIndex(batchRecord);
   }
 
   private ReentrantLock buildIndexLock = new ReentrantLock();
@@ -259,10 +261,10 @@ class Timer implements Lifecycle {
       if (maxCursor.compareTo(timerIndex.getNext()) < 0) {
         maxCursor = timerIndex.getNext();
       }
-      if (timerIndex.getTimestamp() == 0) {
+      if (!timerIndex.isTimer()) {
         continue;
       }
-      int slot = (int) (timerIndex.getTimestamp() / 1000 % TIMER_WINDOW);
+      int slot = timerIndex.getSlot();
       List<TimerIndex> indexes = timestamp2Index.get(slot);
       if (indexes == null) {
         indexes = new LinkedList<>();
@@ -303,7 +305,7 @@ class Timer implements Lifecycle {
     for (Map.Entry<Integer, List<TimerIndex>> entry : timestamp2Index.entrySet()) {
       int slot = entry.getKey();
       List<TimerIndex> indexes = entry.getValue();
-      byte[] indexesBytes = TimerIndex.toBytes(indexes);
+      byte[] indexesBytes = TimerUtils.toTimerIndexBytes(indexes);
       BatchRecord indexesRecord =
           BatchRecord.newBuilder()
               .setFlag(INVISIBLE_FLAG | TIMER_FLAG)
@@ -398,7 +400,7 @@ class Timer implements Lifecycle {
                         String.format(
                             "[CATCHUP_UNEXPECTED]%s,NO_NEW_MSG,%s", partition.name(), cursor));
                   }
-                  timerIndexQueue.addAll(TimerUtils.getTimerIndexes(getResult.getBatchRecord()));
+                  timerIndexQueue.add(TimerUtils.getTimerIndex(getResult.getBatchRecord()));
                   Cursor next = Cursor.get(getResult.getNextCursor());
                   nextTimerIndexBuildCursor.setIndex(next.getIndex());
                   nextTimerIndexBuildCursor.setOffset(next.getOffset());
@@ -466,7 +468,7 @@ class Timer implements Lifecycle {
         log.warn("[TIMER_PREPARE_FAIL]tim={},cursor={}", timestamp, cursor, e);
         break;
       }
-      putTimerCursor((int) (timestampSecs % TIMER_WINDOW), NOOP_CURSOR);
+      putTimerCursor(slot, NOOP_CURSOR);
     }
     timerNextTimestamp = timestamp;
 
@@ -615,6 +617,7 @@ class Timer implements Lifecycle {
       }
       timerIndexesCF.exceptionally(
           t -> {
+            t.printStackTrace();
             timerIndexesCF = null;
             return null;
           });
@@ -624,13 +627,9 @@ class Timer implements Lifecycle {
     private synchronized CompletableFuture<Void> commit(List<TimerIndex> timerIndexes) {
       List<TimerIndex> matchedTimerIndexes = new LinkedList<>();
       List<TimerIndex> unmatchedTimerIndexes = new LinkedList<>();
-      // 为什么是两个？
+
       for (TimerIndex timerIndex : timerIndexes) {
-        if (timerIndex.getTimestamp() > timestamp) {
-          unmatchedTimerIndexes.add(timerIndex);
-          continue;
-        }
-        matchedTimerIndexes.add(timerIndex);
+        timerIndex.split(timestamp, matchedTimerIndexes, unmatchedTimerIndexes);
       }
       // TODO: avoid link batch record build multiple time when recover
       // TODO: support record key
@@ -642,17 +641,24 @@ class Timer implements Lifecycle {
       AppendPipeline pipeline = partition.appendPipeline();
       BatchRecord.Builder link = BatchRecord.newBuilder().setFlag(LINK_FLAG | TIMER_FLAG);
       for (TimerIndex timerIndex : matchedTimerIndexes) {
-        log.info(
-            "[TIMER_LINK]partition={},tim={},index={},offset={}",
-            partition.name(),
-            timerIndex.getTimestamp(),
-            timerIndex.getIndex(),
-            timerIndex.getOffset());
-        link.addRecords(
-            Record.newBuilder()
-                .putHeaders(TIMER_TIMESTAMP_HEADER, ByteString.copyFrom(Utils.getBytes(timestamp)))
-                .setValue(ByteString.copyFrom(timerIndex.toLinkBytes()))
-                .build());
+        byte[] timerIndexBytes = timerIndex.getTimerIndexBytes();
+        ByteBuffer buf = ByteBuffer.wrap(timerIndexBytes);
+        for (int i = 0; i < timerIndexBytes.length / TIMER_INDEX_SIZE; i++) {
+          log.info(
+              "[TIMER_LINK]partition={},tim={},index={},offset={}",
+              partition.name(),
+              buf.getLong(),
+              buf.getInt(),
+              buf.getLong());
+          link.addRecords(
+              Record.newBuilder()
+                  .putHeaders(
+                      TIMER_TIMESTAMP_HEADER, ByteString.copyFrom(Utils.getBytes(timestamp)))
+                  .setValue(
+                      ByteString.copyFrom(
+                          timerIndexBytes, i * TIMER_INDEX_SIZE + 8, TIMER_LINK_SIZE))
+                  .build());
+        }
       }
 
       // 分开是便于回收，timer index 调度完后空间就可以被回收了。
@@ -661,7 +667,7 @@ class Timer implements Lifecycle {
           Record.newBuilder()
               .putHeaders(TIMER_TYPE_HEADER, ByteString.copyFrom(TIMER_COMMIT_TYPE))
               .putHeaders(TIMER_TIMESTAMP_HEADER, ByteString.copyFrom(Utils.getBytes(timestamp)))
-              .setValue(ByteString.copyFrom(TimerIndex.toBytes(unmatchedTimerIndexes)))
+              .setValue(ByteString.copyFrom(TimerUtils.toTimerIndexBytes(unmatchedTimerIndexes)))
               .build());
 
       return CompletableFuture.allOf(
