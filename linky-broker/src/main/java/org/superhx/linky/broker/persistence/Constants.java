@@ -59,7 +59,7 @@ public class Constants {
   /** meta key start */
   public static final byte[] TIMER_SLOT_SEGMENT_KEY_PREFIX = Utils.getBytes(1);
 
-  public static final byte[] TIMER_INDEX_BUILD_LSO_KEY = Utils.getBytes(2);
+  public static final byte[] TIMER_LSO_KEY = Utils.getBytes(2);
 
   public static final byte[] TIMER_NEXT_TIMESTAMP_KEY = Utils.getBytes(3);
 

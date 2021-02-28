@@ -22,6 +22,7 @@ import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.BatchRecordOrBuilder;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -89,23 +90,47 @@ public class TimerUtils {
     return (int) ((timestamp / 1000) % TIMER_WINDOW);
   }
 
-  public static boolean isTimerCommit(BatchRecordOrBuilder batchRecord) {
-    if ((batchRecord.getFlag() & TIMER_FLAG) == 0) {
+  public static boolean isTimerPrepare(BatchRecordOrBuilder batchRecord) {
+    if (!((batchRecord.getFlag() & TIMER_FLAG) != 0
+        && (batchRecord.getFlag() & INVISIBLE_FLAG) != 0)) {
       return false;
     }
     if (batchRecord.getRecordsCount() == 0) {
       return false;
     }
-    return TIMER_COMMIT_TYPE.equals(
-        batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null));
+    ByteString bs = batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null);
+    return bs != null && Arrays.equals(TIMER_PREPARE_TYPE, bs.toByteArray());
   }
 
-  public static boolean isTimerIndex(BatchRecordOrBuilder batchRecord) {
+  public static boolean isTimerLink(BatchRecordOrBuilder batchRecord) {
     if ((batchRecord.getFlag() & TIMER_FLAG) == 0) {
       return false;
     }
-    return TIMER_INDEX_TYPE.equals(
-        batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null));
+    if ((batchRecord.getFlag() & LINK_FLAG) == 0) {
+      return false;
+    }
+    return true;
+  }
+
+  public static boolean isTimerCommit(BatchRecordOrBuilder batchRecord) {
+    if (!((batchRecord.getFlag() & TIMER_FLAG) != 0
+        && (batchRecord.getFlag() & INVISIBLE_FLAG) != 0)) {
+      return false;
+    }
+    if (batchRecord.getRecordsCount() == 0) {
+      return false;
+    }
+    ByteString bs = batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null);
+    return bs != null && Arrays.equals(TIMER_COMMIT_TYPE, bs.toByteArray());
+  }
+
+  public static boolean isTimerIndex(BatchRecordOrBuilder batchRecord) {
+    if (!((batchRecord.getFlag() & TIMER_FLAG) != 0
+        && (batchRecord.getFlag() & INVISIBLE_FLAG) != 0)) {
+      return false;
+    }
+    ByteString bs = batchRecord.getRecords(0).getHeadersOrDefault(TIMER_TYPE_HEADER, null);
+    return bs != null && Arrays.equals(TIMER_INDEX_TYPE, bs.toByteArray());
   }
 
   public static int getSlot(BatchRecord batchRecord) {

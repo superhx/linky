@@ -23,6 +23,6 @@ public class Flag {
   }
 
   public static boolean isTimer(int flag) {
-    return (flag & Constants.INVISIBLE_FLAG) != 0 && (flag & Constants.TIMER_FLAG) != 0;
+    return (flag & Constants.TIMER_FLAG) != 0;
   }
 }

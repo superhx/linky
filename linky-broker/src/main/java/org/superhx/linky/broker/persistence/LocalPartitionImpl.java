@@ -19,6 +19,7 @@ package org.superhx.linky.broker.persistence;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.TextFormat;
 import io.grpc.Context;
+import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.LinkyIOException;
@@ -51,6 +52,7 @@ public class LocalPartitionImpl implements Partition {
   private ReentrantLock appendLock = new ReentrantLock();
   private Timer timer;
   private ScheduledFuture timerProcessTask;
+  private List<AppendHook> appendHooks;
 
   public LocalPartitionImpl(PartitionMeta meta) {
     this.meta = meta;
@@ -60,10 +62,6 @@ public class LocalPartitionImpl implements Partition {
 
   @Override
   public CompletableFuture<AppendResult> append(BatchRecord batchRecord) {
-    /**
-     * 秒级精度，向下规整。 边界 timer 如何处理。正好在调度？如果写进去会出现 timer append 的延迟，timer index 构建延迟，怎么处理
-     * 有构建延迟是不能推进的，如果推进了，会造成漏调度 or 延迟调度 首先前置的写入卡点，获取offset，然后等待append 完，构建完
-     */
     return getLastSegment()
         .thenCompose(
             s -> {
@@ -81,33 +79,33 @@ public class LocalPartitionImpl implements Partition {
   }
 
   public CompletableFuture<AppendResult> append0(
-      Segment segment, Segment.AppendContext context, BatchRecord batchRecord) {
+      Segment segment, Segment.AppendContext segCtx, BatchRecord batchRecord) {
     BatchRecord.Builder batchRecordBuilder = batchRecord.toBuilder();
     int offsetCount = Utils.getOffsetCount(batchRecord);
-    long timestamp = batchRecordBuilder.getVisibleTimestamp();
-    TimerIndex timerIndex = timer.transform(batchRecordBuilder);
+    AppendContext ctx = new AppendContext();
+    for (AppendHook hook : appendHooks) {
+      hook.before(ctx, batchRecordBuilder);
+    }
     if (log.isDebugEnabled()) {
       log.debug("[PARTITION_APPEND]{}", TextFormat.shortDebugString(batchRecord));
     }
     appendLock.lock();
     try {
       return segment
-          .append(context, batchRecordBuilder.build())
+          .append(segCtx, batchRecordBuilder.build())
           .thenApply(
               appendResult -> {
                 switch (appendResult.getStatus()) {
                   case SUCCESS:
-                    timerIndex
-                        .setCursor(appendResult.getIndex(), appendResult.getOffset())
-                        .setTimerIndex(timestamp, appendResult.getIndex(), appendResult.getOffset())
-                        .setNext(
-                            new Cursor(
-                                appendResult.getIndex(), appendResult.getOffset() + offsetCount));
-                    timer.asyncBuildTimerIndex(timerIndex);
-                    ByteBuffer cursor = ByteBuffer.allocate(4 + 8);
-                    cursor.putInt(appendResult.getIndex());
-                    cursor.putLong(appendResult.getOffset());
-                    return new AppendResult(cursor.array());
+                    Cursor cursor = new Cursor(appendResult.getIndex(), appendResult.getOffset());
+                    ctx.setCursor(cursor);
+                    ctx.setNextCursor(
+                        new Cursor(
+                            appendResult.getIndex(), appendResult.getOffset() + offsetCount));
+                    for (AppendHook hook : appendHooks) {
+                      hook.after(ctx);
+                    }
+                    return new AppendResult(cursor.toBytes());
                   default:
                     return new AppendResult(AppendStatus.FAIL);
                 }
@@ -260,11 +258,11 @@ public class LocalPartitionImpl implements Partition {
 
   @Override
   public CompletableFuture<GetResult> get(byte[] cursor) {
-    return get(cursor, true);
+    return get(cursor, true, true);
   }
 
   @Override
-  public CompletableFuture<GetResult> get(byte[] cursor, boolean skipInvisible) {
+  public CompletableFuture<GetResult> get(byte[] cursor, boolean skipInvisible, boolean link) {
     ByteBuffer cursorBuf = ByteBuffer.wrap(cursor);
     int segmentIndex = cursorBuf.getInt();
     long offset = cursorBuf.getLong();
@@ -304,19 +302,19 @@ public class LocalPartitionImpl implements Partition {
             getResult.setNextCursor(cursor);
             return CompletableFuture.completedFuture(getResult);
           } else {
-            if ((r.getFlag() & Constants.LINK_FLAG) != 0) {
+            if (link && (r.getFlag() & Constants.LINK_FLAG) != 0) {
               Cursor linkedCursor =
                   Cursor.get(
                       r.getRecords((int) (nextOffset - 1 - r.getFirstOffset()))
                           .getValue()
                           .toByteArray());
-              return get(linkedCursor.toBytes(), false)
+              return get(linkedCursor.toBytes(), false, true)
                   .thenApply(linkedGetResult -> linkedGetResult.setNextCursor(nextCursor.array()));
             }
 
             if (skipInvisible) {
               if ((r.getFlag() & INVISIBLE_FLAG) != 0) {
-                return get(new Cursor(finalSegmentIndex, nextOffset).toBytes(), true);
+                return get(new Cursor(finalSegmentIndex, nextOffset).toBytes(), true, link);
               }
             }
 
@@ -325,6 +323,24 @@ public class LocalPartitionImpl implements Partition {
             return CompletableFuture.completedFuture(getResult);
           }
         });
+  }
+
+  @Override
+  public void get(byte[] startCursor, byte[] endCursor, StreamObserver<BatchRecord> stream) {
+    Cursor cursor = Cursor.get(startCursor);
+    Cursor end = Cursor.get(endCursor);
+
+    for (; cursor.compareTo(end) < 0; ) {
+      try {
+        GetResult rst = get(cursor.toBytes(), false, false).get();
+        stream.onNext(rst.getBatchRecord());
+        cursor = Cursor.get(rst.getNextCursor());
+      } catch (Exception e) {
+        // TODO: fixme
+        e.printStackTrace();
+      }
+    }
+    stream.onCompleted();
   }
 
   @Override
@@ -493,8 +509,17 @@ public class LocalPartitionImpl implements Partition {
     this.localSegmentManager = localSegmentManager;
   }
 
+  @Override
   public AppendPipeline appendPipeline() {
     return new AppendPipelineImpl();
+  }
+
+  @Override
+  public void registerAppendHook(AppendHook appendHook) {
+    if (appendHooks == null) {
+      appendHooks = new ArrayList<>();
+    }
+    appendHooks.add(appendHook);
   }
 
   class AppendPipelineImpl implements AppendPipeline {

@@ -60,13 +60,6 @@ public class TimerIndex {
     return this;
   }
 
-  public TimerIndex setTimerIndex(long timestamp, int index, long offset) {
-    if (isTimer()) {
-      indexes = TimerUtils.getTimerIndexBytes(timestamp, index, offset);
-    }
-    return this;
-  }
-
   public Cursor getCursor() {
     return cursor;
   }
@@ -84,13 +77,13 @@ public class TimerIndex {
     }
     ByteBuffer buf = ByteBuffer.wrap(indexes);
     for (int i = 0; i < count(); i++) {
-      long tim = buf.getLong() / 1000 * 1000;
+      long tim = buf.getLong();
       int index = buf.getInt();
       long offset = buf.getLong();
       TimerIndex timerIndex = new TimerIndex();
       timerIndex.setSlot(slot);
-      timerIndex.setTimerIndex(tim, index, offset);
-      if (tim <= timestamp) {
+      timerIndex.setIndexes(TimerUtils.getTimerIndexBytes(tim,index, offset));
+      if ((tim / 1000 * 1000) <= timestamp) {
         matched.add(timerIndex);
       } else {
         unmatched.add(timerIndex);

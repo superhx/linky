@@ -16,10 +16,13 @@
  */
 package org.superhx.linky.broker.persistence;
 
+import io.grpc.stub.StreamObserver;
 import org.superhx.linky.service.proto.BatchRecord;
 import org.superhx.linky.service.proto.PartitionMeta;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public interface Partition {
@@ -28,7 +31,9 @@ public interface Partition {
 
   CompletableFuture<GetResult> get(byte[] cursor);
 
-  CompletableFuture<GetResult> get(byte[] cursor, boolean skipInvisible);
+  CompletableFuture<GetResult> get(byte[] cursor, boolean skipInvisible, boolean link);
+
+  void get(byte[] startCursor, byte[] endCursor, StreamObserver<BatchRecord> stream);
 
   CompletableFuture<GetKVResult> getKV(byte[] key, boolean meta);
 
@@ -40,7 +45,6 @@ public interface Partition {
 
   Cursor getNextCursor();
 
-
   CompletableFuture<List<TimerIndex>> getTimerSlot(Cursor cursor);
 
   PartitionMeta meta();
@@ -51,8 +55,54 @@ public interface Partition {
 
   CompletableFuture<Void> setMeta(byte[]... kv);
 
-
   AppendPipeline appendPipeline();
+
+  void registerAppendHook(AppendHook appendHook);
+
+  interface AppendHook {
+    void before(AppendContext ctx, BatchRecord.Builder batchRecord);
+
+    void after(AppendContext ctx);
+  }
+
+  class AppendContext {
+    public static final String TIMER_INDEX_CTX_KEY = "TIMER_INDEX_CTX_KEY";
+    public static final String TIMERSTAMP_CTX_KEY = "TIMERSTAMP_CTX_KEY";
+
+    private Map<String, Object> contexts;
+    private Cursor cursor;
+    private Cursor nextCursor;
+
+    public <T> T getContext(String name) {
+      if (contexts == null) {
+        return null;
+      }
+      return (T) contexts.get(name);
+    }
+
+    public void putContext(String name, Object obj) {
+      if (contexts == null) {
+        contexts = new HashMap<>();
+      }
+      contexts.put(name, obj);
+    }
+
+    public Cursor getCursor() {
+      return cursor;
+    }
+
+    public void setCursor(Cursor cursor) {
+      this.cursor = cursor;
+    }
+
+    public Cursor getNextCursor() {
+      return nextCursor;
+    }
+
+    public void setNextCursor(Cursor nextCursor) {
+      this.nextCursor = nextCursor;
+    }
+  }
 
   enum AppendStatus {
     SUCCESS,
@@ -152,5 +202,4 @@ public interface Partition {
     SHUTDOWN,
     ERROR
   }
-
 }

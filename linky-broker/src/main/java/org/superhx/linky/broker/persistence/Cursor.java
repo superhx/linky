@@ -50,6 +50,10 @@ public class Cursor implements Comparable<Cursor> {
     this.offset = offset;
   }
 
+  public Cursor next() {
+    return new Cursor(index, offset + 1);
+  }
+
   @Override
   public String toString() {
     return "Cursor{index=" + index + ",offset=" + offset + "}";

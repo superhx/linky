@@ -17,6 +17,7 @@
 package org.superhx.linky.broker.persistence;
 
 import com.google.protobuf.ByteString;
+import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.superhx.linky.broker.Lifecycle;
@@ -29,10 +30,13 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Constants.*;
+import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMERSTAMP_CTX_KEY;
+import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMER_INDEX_CTX_KEY;
 
 class Timer implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(Timer.class);
@@ -51,39 +55,95 @@ class Timer implements Lifecycle {
   private volatile Cursor nextTimerIndexBuildCursor;
   // LOAD & SAVE
   private volatile Cursor timerIndexBuildLSO;
+
+  private volatile Cursor timerCommitLSO;
+
   private volatile boolean catching;
 
   private BlockingQueue<BatchRecord> waitingRetryTimerIndexes = new LinkedBlockingQueue<>();
 
+  private AtomicReference<Status> status = new AtomicReference<>(Status.RECOVER);
+
+  private BlockingQueue<TimerCommit> timerCommitQueue = new LinkedBlockingQueue<>();
+
+  enum Status {
+    RECOVER,
+    START
+  }
+
   public Timer(Partition partition) {
     this.partition = partition;
+    partition.registerAppendHook(getAppendHook());
+  }
+
+  private Partition.AppendHook getAppendHook() {
+    return new Partition.AppendHook() {
+      @Override
+      public void before(Partition.AppendContext ctx, BatchRecord.Builder batchRecord) {
+        TimerIndex timerIndex;
+        long timestampBarrier = Timer.this.timestampBarrier;
+        long visibleTimestamp =
+            (batchRecord.getVisibleTimestamp() - TIMESTAMP_BARRIER_SAFE_WINDOW) / 1000 * 1000;
+        if (visibleTimestamp <= 0) {
+          timerIndex = TimerUtils.getTimerIndex(batchRecord);
+        } else if (visibleTimestamp <= Math.max(timestampBarrier, System.currentTimeMillis())) {
+          timerIndex = TimerUtils.getTimerIndex(batchRecord);
+        } else {
+          batchRecord.setFlag(batchRecord.getFlag() | INVISIBLE_FLAG | TIMER_FLAG);
+          timerIndex = TimerUtils.getTimerIndex(batchRecord);
+          ctx.putContext(TIMERSTAMP_CTX_KEY, batchRecord.getVisibleTimestamp());
+          if (!timerEnable) {
+            try {
+              enableTimer();
+            } catch (Exception e) {
+              throw new LinkyIOException(e);
+            }
+          }
+        }
+        ctx.putContext(TIMER_INDEX_CTX_KEY, timerIndex);
+      }
+
+      @Override
+      public void after(Partition.AppendContext ctx) {
+        TimerIndex timerIndex = ctx.getContext(TIMER_INDEX_CTX_KEY);
+        Cursor cursor = ctx.getCursor();
+        timerIndex.setCursor(cursor.getIndex(), cursor.getOffset());
+        timerIndex.setNext(ctx.getNextCursor());
+        Long timestamp = ctx.getContext(TIMERSTAMP_CTX_KEY);
+        if (timestamp != null) {
+          timerIndex.setIndexes(
+              TimerUtils.getTimerIndexBytes(
+                  ctx.getContext(TIMERSTAMP_CTX_KEY), cursor.getIndex(), cursor.getOffset()));
+        }
+        asyncBuildTimerIndex(timerIndex);
+      }
+    };
   }
 
   public void init() {
-    byte[] timerIndexBuildLSOBytes = partition.getMeta(TIMER_INDEX_BUILD_LSO_KEY);
-    if (timerIndexBuildLSOBytes == null) {
+    byte[] lsoBytes = partition.getMeta(TIMER_LSO_KEY);
+    if (lsoBytes == null) {
       timerEnable = false;
-      try {
-        enableTimer();
-      } catch (Exception e) {
-        e.printStackTrace();
-      }
-      //      log.info("[TIMER_INIT]{},timerOff", partition.name());
+      status.set(Status.START);
       return;
     }
     log.info("[TIMER_INIT]{},timerOn", partition.name());
-    timerIndexBuildLSO = Cursor.get(timerIndexBuildLSOBytes);
+    timerIndexBuildLSO = Cursor.get(lsoBytes);
+    timerCommitLSO = Cursor.get(lsoBytes);
     nextTimerIndexBuildCursor = timerIndexBuildLSO;
     timestampBarrierCursor = timerIndexBuildLSO;
     byte[] timerNextTimestampBytes = partition.getMeta(TIMER_NEXT_TIMESTAMP_KEY);
     timerNextTimestamp = Utils.getLong(timerNextTimestampBytes);
     timestampBarrier = timerNextTimestamp;
     safeTriggerTimestamp = timerNextTimestamp;
+    status.set(Status.RECOVER);
     log.info(
-        "[TIMER_META_LOAD]{},timerIndexBuildLso={},timerNextTimestamp={}",
+        "[TIMER_META_LOAD]{},timerLSO={},timerNextTimestamp={}",
         partition.name(),
         timerIndexBuildLSO,
         timerNextTimestamp);
+    new Recover(partition.getNextCursor()).run();
+    timerEnable = true;
   }
 
   public void shutdown() {
@@ -104,10 +164,14 @@ class Timer implements Lifecycle {
         .thenCompose(
             nil ->
                 partition.setMeta(
-                    Constants.TIMER_INDEX_BUILD_LSO_KEY,
-                    timerIndexBuildLSO.toBytes(),
+                    Constants.TIMER_LSO_KEY,
+                    getTimerLSO().toBytes(),
                     Constants.TIMER_NEXT_TIMESTAMP_KEY,
                     Utils.getBytes(timerNextTimestamp)));
+  }
+
+  private Cursor getTimerLSO() {
+    return timerIndexBuildLSO.compareTo(timerCommitLSO) < 0 ? timerIndexBuildLSO : timerCommitLSO;
   }
 
   // TODO: async enable
@@ -118,6 +182,7 @@ class Timer implements Lifecycle {
     timerEnable = true;
     log.info("[ENABLE_TIMER]{}", partition.name());
     timerIndexBuildLSO = partition.getNextCursor();
+    timerCommitLSO = timerIndexBuildLSO;
     nextTimerIndexBuildCursor = timerIndexBuildLSO;
     timestampBarrierCursor = timerIndexBuildLSO;
 
@@ -127,39 +192,23 @@ class Timer implements Lifecycle {
 
     partition
         .setMeta(
-            Constants.TIMER_INDEX_BUILD_LSO_KEY,
+            Constants.TIMER_LSO_KEY,
             timerIndexBuildLSO.toBytes(),
             Constants.TIMER_NEXT_TIMESTAMP_KEY,
             Utils.getBytes(timerNextTimestamp))
         .get();
   }
 
-  public TimerIndex transform(BatchRecord.Builder batchRecord) {
-    long timestampBarrier = this.timestampBarrier;
-    long visibleTimestamp =
-        (batchRecord.getVisibleTimestamp() - TIMESTAMP_BARRIER_SAFE_WINDOW) / 1000 * 1000;
-    if (visibleTimestamp <= 0) {
-      return TimerUtils.getTimerIndex(batchRecord);
-    }
-    if (!timerEnable) {
-      try {
-        enableTimer();
-      } catch (Exception e) {
-        throw new LinkyIOException(e);
-      }
-    }
-    if (visibleTimestamp <= timestampBarrier) {
-      return TimerUtils.getTimerIndex(batchRecord);
-    }
-    batchRecord.setFlag(batchRecord.getFlag() | INVISIBLE_FLAG | TIMER_FLAG);
-    return TimerUtils.getTimerIndex(batchRecord);
-  }
-
   private ReentrantLock buildIndexLock = new ReentrantLock();
   private ExecutorService executorService = Utils.newFixedThreadPool(1, "TimerCatchup");
+  private volatile Cursor expectedCatchupCursor;
 
   public void asyncBuildTimerIndex(TimerIndex timerIndex) {
+    expectedCatchupCursor = timerIndex.getCursor();
     if (!timerEnable) {
+      return;
+    }
+    if (status.get() != Status.START) {
       return;
     }
     buildIndexLock.lock();
@@ -273,14 +322,28 @@ class Timer implements Lifecycle {
       indexes.add(timerIndex);
     }
 
+    Cursor timerIndexBuildLSO = this.timerIndexBuildLSO;
     if (maxCursor.compareTo(timerIndexBuildLSO) > 0) {
       timerIndexBuildLSO = maxCursor;
     }
+    Cursor barrier = timerIndexBuildLSO;
     return buildTimerIndex0(timestamp2Index)
-        .thenAccept(nil -> updateTimestampBarrier(timerIndexBuildLSO));
+        .thenAccept(
+            nil -> {
+              updateTimestampBarrier(barrier);
+              this.timerIndexBuildLSO = barrier;
+            });
   }
 
+  private static final long MAX_SAFE_TIMESTAMP_DIFF = TimeUnit.SECONDS.toMillis(30);
+
   private void updateTimestampBarrier(Cursor maxTimerIndexBuildCursor) {
+    if (System.currentTimeMillis() - safeTriggerTimestamp > MAX_SAFE_TIMESTAMP_DIFF) {
+      log.warn(
+          "[SAFE_TIMESTAMP_DIFF]safe={},diff={}",
+          safeTriggerTimestamp,
+          System.currentTimeMillis() - safeTriggerTimestamp);
+    }
     if (maxTimerIndexBuildCursor.compareTo(timestampBarrierCursor) < 0) {
       return;
     }
@@ -306,6 +369,9 @@ class Timer implements Lifecycle {
       int slot = entry.getKey();
       List<TimerIndex> indexes = entry.getValue();
       byte[] indexesBytes = TimerUtils.toTimerIndexBytes(indexes);
+      if (indexesBytes.length == 0) {
+        continue;
+      }
       BatchRecord indexesRecord =
           BatchRecord.newBuilder()
               .setFlag(INVISIBLE_FLAG | TIMER_FLAG)
@@ -392,7 +458,7 @@ class Timer implements Lifecycle {
     }
     CompletableFuture<Cursor> nextCursor =
         partition
-            .get(cursor.toBytes(), false)
+            .get(cursor.toBytes(), false, false)
             .thenApply(
                 getResult -> {
                   if (getResult.getStatus() == Partition.GetStatus.NO_NEW_MSG) {
@@ -409,9 +475,10 @@ class Timer implements Lifecycle {
     return nextCursor.thenAccept(c -> catchupBuildTimerIndex0(c, toCursor));
   }
 
-  private BlockingQueue<TimerCommit> timerCommitQueue = new LinkedBlockingQueue<>();
-
   private CompletableFuture<Void> prepare() {
+    if (timerCommitQueue.size() == 0) {
+      timerCommitLSO = partition.getNextCursor();
+    }
     long safeTriggerTimestamp = this.safeTriggerTimestamp;
     long toTimestamp = Math.min(safeTriggerTimestamp, System.currentTimeMillis() / 1000 * 1000);
     if (toTimestamp - timerNextTimestamp < 1000L) {
@@ -464,11 +531,11 @@ class Timer implements Lifecycle {
           break;
         }
         timerCommitQueue.offer(new TimerCommit(timestamp, cursor));
+        putTimerCursor(slot, NOOP_CURSOR);
       } catch (Exception e) {
         log.warn("[TIMER_PREPARE_FAIL]tim={},cursor={}", timestamp, cursor, e);
         break;
       }
-      putTimerCursor(slot, NOOP_CURSOR);
     }
     timerNextTimestamp = timestamp;
 
@@ -580,6 +647,7 @@ class Timer implements Lifecycle {
     private volatile CompletableFuture<List<TimerIndex>> timerIndexesCF;
     private volatile CompletableFuture<Void> commitCF;
     private volatile boolean done;
+    private volatile boolean linked;
 
     public TimerCommit(long timestamp, Cursor cursor) {
       this.timestamp = timestamp;
@@ -588,6 +656,10 @@ class Timer implements Lifecycle {
 
     public boolean isDone() {
       return done;
+    }
+
+    public void setLinked() {
+      linked = true;
     }
 
     @Override
@@ -631,13 +703,7 @@ class Timer implements Lifecycle {
       for (TimerIndex timerIndex : timerIndexes) {
         timerIndex.split(timestamp, matchedTimerIndexes, unmatchedTimerIndexes);
       }
-      // TODO: avoid link batch record build multiple time when recover
       // TODO: support record key
-      // TODO: scan avoid 重复
-      /**
-       * 共用一个 lso = min(timerIndexBuildLso, timercommitLso) recover 流程 - recover 不影响消息写入 - 避免
-       * timerindex 重复构建 - 避免 重复 prepare/link/commit 获取 confirmOffset。从 lso
-       */
       AppendPipeline pipeline = partition.appendPipeline();
       BatchRecord.Builder link = BatchRecord.newBuilder().setFlag(LINK_FLAG | TIMER_FLAG);
       for (TimerIndex timerIndex : matchedTimerIndexes) {
@@ -662,7 +728,8 @@ class Timer implements Lifecycle {
       }
 
       // 分开是便于回收，timer index 调度完后空间就可以被回收了。
-      BatchRecord.Builder commit = BatchRecord.newBuilder().setFlag(INVISIBLE_FLAG | TIMER_FLAG);
+      BatchRecord.Builder commit =
+          BatchRecord.newBuilder().setFlag(INVISIBLE_FLAG | TIMER_FLAG | META_FLAG);
       commit.addRecords(
           Record.newBuilder()
               .putHeaders(TIMER_TYPE_HEADER, ByteString.copyFrom(TIMER_COMMIT_TYPE))
@@ -670,17 +737,20 @@ class Timer implements Lifecycle {
               .setValue(ByteString.copyFrom(TimerUtils.toTimerIndexBytes(unmatchedTimerIndexes)))
               .build());
 
-      return CompletableFuture.allOf(
-          pipeline
-              .append(link.build())
-              .thenAccept(
-                  rst -> {
-                    if (rst.getStatus() != Partition.AppendStatus.SUCCESS) {
-                      throw new LinkyIOException(
-                          String.format("[TIMER_LINK_APPEND_FAIL]%s", rst.getStatus()));
-                    }
-                  }),
-          // 如何减少多 link 一次的成本
+      List<CompletableFuture<Void>> futures = new LinkedList<>();
+      if (!linked) {
+        futures.add(
+            pipeline
+                .append(link.build())
+                .thenAccept(
+                    rst -> {
+                      if (rst.getStatus() != Partition.AppendStatus.SUCCESS) {
+                        throw new LinkyIOException(
+                            String.format("[TIMER_LINK_APPEND_FAIL]%s", rst.getStatus()));
+                      }
+                    }));
+      }
+      futures.add(
           pipeline
               .append(commit.build())
               .thenAccept(
@@ -690,9 +760,190 @@ class Timer implements Lifecycle {
                           String.format("[TIMER_COMMIT_APPEND_FAIL]%s", rst.getStatus()));
                     }
                     if (log.isDebugEnabled()) {
-                      log.debug("[TIMER_COMMIT]{}", timestamp);
+                      log.debug("[TIMER_COMMIT]{},{}", partition.name(), timestamp);
                     }
                   }));
+
+      return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+    }
+  }
+
+  class Recover {
+    private Cursor endCursor;
+    private Map<Integer, Set<ByteBuffer>> waitingBuild = new HashMap<>();
+    private Map<Long, TimerCommit> waitingCommit = new HashMap<>();
+    private long maxCommitedTimestamp = -1L;
+
+    public Recover(Cursor endCursor) {
+      this.endCursor = endCursor;
+    }
+
+    public void run() {
+      log.info("[TIMER_RECOVER_START]{}", partition.name());
+      partition.get(
+          timerIndexBuildLSO.toBytes(),
+          endCursor.toBytes(),
+          new StreamObserver<BatchRecord>() {
+            @Override
+            public void onNext(BatchRecord batchRecord) {
+              Recover.this.onNext(batchRecord);
+            }
+
+            @Override
+            public void onError(Throwable throwable) {
+              log.error("TODO: Recover fail retry", throwable);
+            }
+
+            @Override
+            public void onCompleted() {
+              Recover.this.onComplete();
+            }
+          });
+    }
+
+    private void onNext(BatchRecord batchRecord) {
+      if (!Flag.isTimer(batchRecord.getFlag())) {
+        return;
+      }
+      // TIMER MSG
+      if (batchRecord.getVisibleTimestamp() > 0) {
+        addWaitingBuild(batchRecord);
+        return;
+      }
+      // TIMER INDEX MSG
+      if (TimerUtils.isTimerIndex(batchRecord)) {
+        delWaitingBuild(batchRecord);
+        return;
+      }
+
+      // TIMER PREPARE MSG
+      if (TimerUtils.isTimerPrepare(batchRecord)) {
+        addTimerCommit(batchRecord);
+        return;
+      }
+
+      // TIMER LINK MSG
+      if (TimerUtils.isTimerLink(batchRecord)) {
+        setTimerLink(batchRecord);
+        return;
+      }
+
+      // TIMER COMMIT MSG
+      if (TimerUtils.isTimerCommit(batchRecord)) {
+        delTimerCommit(batchRecord);
+        return;
+      }
+    }
+
+    private void onComplete() {
+      Map<Integer, List<TimerIndex>> timerIndexes = new HashMap<>();
+      for (Map.Entry<Integer, Set<ByteBuffer>> entry : waitingBuild.entrySet()) {
+        int slot = entry.getKey();
+        Set<ByteBuffer> indexes = entry.getValue();
+        if (indexes.size() == 0) {
+          continue;
+        }
+        int size = indexes.stream().mapToInt(b -> b.array().length).sum();
+        ByteBuffer indexesBytes = ByteBuffer.allocate(size);
+        indexes.forEach(b -> indexesBytes.put(b));
+        TimerIndex timerIndex = new TimerIndex();
+        timerIndex.setSlot(slot);
+        timerIndex.setIndexes(indexesBytes.array());
+        timerIndexes.put(slot, Arrays.asList(timerIndex));
+      }
+      buildTimerIndex0(timerIndexes)
+          .thenAccept(
+              nil -> {
+                timerIndexBuildLSO = endCursor;
+                nextTimerIndexBuildCursor = endCursor;
+                status.set(Status.START);
+                log.info("[TIMER_RECOVER_END]{}", partition.name());
+              });
+      timerNextTimestamp = Math.max(timerNextTimestamp, maxCommitedTimestamp);
+      waitingCommit.values().forEach(tc -> timerCommitQueue.offer(tc));
+    }
+
+    private void addWaitingBuild(BatchRecord batchRecord) {
+      int slot = TimerUtils.slot(batchRecord.getVisibleTimestamp());
+      byte[] indexBytes =
+          TimerUtils.getTimerIndexBytes(
+              batchRecord.getVisibleTimestamp(),
+              batchRecord.getIndex(),
+              batchRecord.getFirstOffset());
+      Set<ByteBuffer> indexes = waitingBuild.get(slot);
+      if (indexes == null) {
+        indexes = new HashSet<>();
+        waitingBuild.put(slot, indexes);
+      }
+      indexes.add(ByteBuffer.wrap(indexBytes));
+    }
+
+    private void delWaitingBuild(BatchRecord batchRecord) {
+      ByteString slotBytes =
+          batchRecord.getRecords(0).getHeadersOrDefault(TIMER_SLOT_RECORD_HEADER, null);
+      int slot = Utils.getInt(slotBytes.toByteArray());
+      Set<ByteBuffer> indexes = waitingBuild.get(slot);
+      if (indexes == null) {
+        return;
+      }
+      byte[] indexesBytes = batchRecord.getRecords(0).getValue().toByteArray();
+      for (int i = 0; i < indexesBytes.length / TIMER_INDEX_SIZE; i++) {
+        byte[] indexBytes = new byte[TIMER_INDEX_SIZE];
+        System.arraycopy(indexesBytes, i * TIMER_INDEX_SIZE, indexBytes, 0, TIMER_INDEX_SIZE);
+        indexes.remove(ByteBuffer.wrap(indexBytes));
+        if (log.isDebugEnabled()) {
+          log.debug("[RECOVER_INDEX_BUILD_SKIP]{}", indexBytes);
+        }
+      }
+    }
+
+    private void addTimerCommit(BatchRecord batchRecord) {
+      if (log.isDebugEnabled()) {
+        log.debug("[RECOVER_SCAN_PREPARE]{}", batchRecord);
+      }
+      Record record = batchRecord.getRecords(0);
+      long timestamp =
+          Utils.getLong(record.getHeadersOrDefault(TIMER_TIMESTAMP_HEADER, null).toByteArray());
+      maxCommitedTimestamp = Math.max(timestamp, maxCommitedTimestamp);
+      byte[] timerCursor =
+          record.getHeadersOrDefault(TIMER_PREPARE_CURSOR_HEADER, null).toByteArray();
+      waitingCommit.put(timestamp, new TimerCommit(timestamp, Cursor.get(timerCursor)));
+    }
+
+    private void setTimerLink(BatchRecord batchRecord) {
+      if (log.isDebugEnabled()) {
+        log.debug("[RECOVER_SCAN_LINK]{}", batchRecord);
+      }
+      Record record = batchRecord.getRecords(0);
+      long timestamp =
+          Utils.getLong(record.getHeadersOrDefault(TIMER_TIMESTAMP_HEADER, null).toByteArray());
+      TimerCommit timerCommit = waitingCommit.get(timestamp);
+      if (timerCommit == null) {
+        return;
+      }
+      timerCommit.setLinked();
+    }
+
+    private void delTimerCommit(BatchRecord batchRecord) {
+      if (log.isDebugEnabled()) {
+        log.debug("[RECOVER_SCAN_COMMIT]{}", batchRecord);
+      }
+      Record record = batchRecord.getRecords(0);
+      long timestamp =
+          Utils.getLong(record.getHeadersOrDefault(TIMER_TIMESTAMP_HEADER, null).toByteArray());
+      waitingCommit.remove(timestamp);
+      int slot = TimerUtils.slot(timestamp);
+      Set<ByteBuffer> indexes = waitingBuild.get(slot);
+      if (indexes == null) {
+        indexes = new HashSet<>();
+        waitingBuild.put(slot, indexes);
+      }
+      byte[] indexesBytes = batchRecord.getRecords(0).getValue().toByteArray();
+      for (int i = 0; i < indexesBytes.length / TIMER_INDEX_SIZE; i++) {
+        byte[] indexBytes = new byte[TIMER_INDEX_SIZE];
+        System.arraycopy(indexesBytes, i * TIMER_INDEX_SIZE, indexBytes, 0, TIMER_INDEX_SIZE);
+        indexes.add(ByteBuffer.wrap(indexBytes));
+      }
     }
   }
 }
