@@ -74,7 +74,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
       return;
     }
 
-    List<NodeMeta> nodeMetas = nodeRegistry.getAliveNodes();
+    List<NodeMeta> nodeMetas = nodeRegistry.getOnlineNodes();
     Map<SegmentKey, SegmentMeta.Builder> segments = this.segments;
     for (Map.Entry<SegmentKey, SegmentMeta.Builder> entry : segments.entrySet()) {
       SegmentMeta.Builder metaBuilder = entry.getValue();
@@ -259,7 +259,7 @@ public class SegmentRegistryImpl extends SegmentManagerServiceGrpc.SegmentManage
     int replicaNum = topicMeta.getReplicaNum();
     List<String> replicas = new ArrayList<>(replicaNum);
     replicas.add(request.getAddress());
-    for (NodeMeta node : nodeRegistry.getAliveNodes()) {
+    for (NodeMeta node : nodeRegistry.getOnlineNodes()) {
       if (node.getAddress().equals(request.getAddress())) {
         continue;
       }

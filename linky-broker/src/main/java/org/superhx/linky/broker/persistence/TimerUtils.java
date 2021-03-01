@@ -36,7 +36,7 @@ public class TimerUtils {
         .orElse(Cursor.NOOP);
   }
 
-  public static TimerIndex getTimerIndex(BatchRecordOrBuilder batchRecord) {
+  public static TimerIndex getTimerIndex(BatchRecordOrBuilder batchRecord, boolean fromStore) {
     TimerIndex timerIndex = new TimerIndex();
     if (isTimerCommit(batchRecord)) {
       ByteString timestampBytes =
@@ -47,6 +47,21 @@ public class TimerUtils {
       timerIndex.setIndexes(timerIndexBytes);
     } else if (Flag.isTimer(batchRecord.getFlag())) {
       timerIndex.setSlot(slot(batchRecord.getVisibleTimestamp()));
+      if (timerIndex.isTimer() && fromStore) {
+        timerIndex.setIndexes(
+            getTimerIndexBytes(
+                batchRecord.getVisibleTimestamp(),
+                batchRecord.getIndex(),
+                batchRecord.getFirstOffset()));
+      }
+    }
+
+    if (fromStore) {
+      timerIndex.setCursor(batchRecord.getIndex(), batchRecord.getFirstOffset());
+      timerIndex.setNext(
+          new Cursor(
+              batchRecord.getIndex(),
+              batchRecord.getFirstOffset() + Utils.getOffsetCount(batchRecord)));
     }
     return timerIndex;
   }

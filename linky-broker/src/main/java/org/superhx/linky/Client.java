@@ -25,6 +25,8 @@ import org.superhx.linky.service.proto.*;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -44,7 +46,9 @@ public class Client {
       BatchRecord batchRecord =
           BatchRecord.newBuilder()
               .setPartition(0)
-              .setVisibleTimestamp(System.currentTimeMillis() + 10000)
+              .setVisibleTimestamp(
+                  LocalDateTime.parse("2021-03-01T21:10:30.00").toEpochSecond(ZoneOffset.of("+8"))
+                      * 1000L)
               .addRecords(
                   Record.newBuilder()
                       .setKey(ByteString.copyFrom("rk", Charset.forName("UTF-8")))
@@ -82,7 +86,7 @@ public class Client {
     System.out.println(
         String.format("send %s message cost %s ms", count, System.currentTimeMillis() - start));
 
-        getkv(stub, "rk");
+    getkv(stub, "rk");
     //    getkv(stub, "rk1");
 
     AtomicReference<byte[]> cursor = new AtomicReference<>(new byte[4 + 8]);
@@ -134,7 +138,7 @@ public class Client {
     }
     channel.shutdownNow().awaitTermination(1, TimeUnit.SECONDS);
   }
-//
+  //
   private static void getkv(RecordServiceGrpc.RecordServiceStub stub, String key)
       throws InterruptedException {
     CountDownLatch getKvLatch = new CountDownLatch(1);

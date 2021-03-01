@@ -188,6 +188,7 @@ public class LinkyStartup implements Lifecycle {
 
     List<Lifecycle> components = new ArrayList<>(this.components);
     Collections.reverse(components);
+
     for (Lifecycle component : components) {
       component.shutdown();
     }

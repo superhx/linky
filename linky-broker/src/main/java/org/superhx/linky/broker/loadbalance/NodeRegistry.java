@@ -24,5 +24,7 @@ import java.util.concurrent.CompletableFuture;
 public interface NodeRegistry {
     CompletableFuture<Void> register(NodeMeta node);
 
+    List<NodeMeta> getOnlineNodes();
+
     List<NodeMeta> getAliveNodes();
 }

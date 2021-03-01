@@ -37,13 +37,24 @@ public class NodeRegistryImpl implements NodeRegistry, Lifecycle {
   }
 
   @Override
-  public List<NodeMeta> getAliveNodes() {
+  public List<NodeMeta> getOnlineNodes() {
     List<NodeMeta> nodes = new ArrayList<>(nodeMap.size());
     nodes.addAll(
         nodeMap.values().stream()
             .filter(t -> (System.currentTimeMillis() - t.getTimestamp()) < TIMEOUT)
             .map(n -> n.getData())
             .filter(n -> n.getStatus() == NodeMeta.Status.ONLINE)
+            .collect(Collectors.toList()));
+    return nodes;
+  }
+
+  @Override
+  public List<NodeMeta> getAliveNodes() {
+    List<NodeMeta> nodes = new ArrayList<>(nodeMap.size());
+    nodes.addAll(
+        nodeMap.values().stream()
+            .filter(t -> (System.currentTimeMillis() - t.getTimestamp()) < TIMEOUT)
+            .map(n -> n.getData())
             .collect(Collectors.toList()));
     return nodes;
   }

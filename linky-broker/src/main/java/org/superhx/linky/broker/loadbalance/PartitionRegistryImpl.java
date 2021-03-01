@@ -223,16 +223,22 @@ public class PartitionRegistryImpl
   }
 
   class Rebalance implements Runnable {
+    private static final String NOOP = "NOOP";
     private Map<Integer, List<PartitionMeta>> newTopicPartitionMap;
     private List<NodeMeta> nodes;
     private Set<NodeMeta> nodeSet;
+    private Set<String> aliveNodes;
     private Map<NodeMeta, AtomicInteger> nodePartitionCount;
 
     public Rebalance() {
       newTopicPartitionMap = new HashMap<>();
-      nodes = new ArrayList<>(nodeRegistry.getAliveNodes());
+      nodes = new ArrayList<>(nodeRegistry.getOnlineNodes());
       nodeSet = new HashSet<>(nodes);
       nodePartitionCount = new HashMap<>();
+      aliveNodes =
+          nodeRegistry.getAliveNodes().stream()
+              .map(n -> n.getAddress())
+              .collect(Collectors.toSet());
       for (NodeMeta nodeMeta : nodes) {
         nodePartitionCount.put(nodeMeta, new AtomicInteger());
       }
@@ -244,10 +250,7 @@ public class PartitionRegistryImpl
     }
 
     private void rebalance0() {
-      if (nodes.size() == 0) {
-        log.info("cannot find node in cluster, exit rebalance");
-        return;
-      }
+      // gracefull shutdown when cluster only have one node
       fastAllocate();
       boolean changed = closeOpen();
       if (changed) {
@@ -276,7 +279,9 @@ public class PartitionRegistryImpl
                         partitionCount)
                     .build();
           }
-          nodePartitionCount.get(Utils.partitionMeta2NodeMeta(partitionMeta)).incrementAndGet();
+          if (!partitionMeta.getAddress().equals(NOOP)) {
+            nodePartitionCount.get(Utils.partitionMeta2NodeMeta(partitionMeta)).incrementAndGet();
+          }
           partitionCount++;
           if (topicPartitionMap.containsKey(topicMeta.getId())
               && topicPartitionMap.get(topicMeta.getId()).containsKey(i)) {}
@@ -288,6 +293,9 @@ public class PartitionRegistryImpl
     }
 
     protected PartitionMeta.Builder chooseNode(PartitionMeta.Builder meta, int partitionCount) {
+      if (nodes.size() == 0) {
+        return meta.setAddress(NOOP);
+      }
       NodeMeta nodeMeta = null;
       if (nodes.size() == 1) {
         nodeMeta = nodes.get(0);
@@ -330,7 +338,7 @@ public class PartitionRegistryImpl
           if (newPartitionMeta.equals(oldPartitionMeta)) {
             continue;
           }
-          if (nodeSet.contains(Utils.partitionMeta2NodeMeta(oldPartitionMeta))) {
+          if (aliveNodes.contains(oldPartitionMeta.getAddress())) {
             close.add(oldPartitionMeta);
           } else {
             log.info("skip close partition {} cause of node down", oldPartitionMeta);
@@ -364,11 +372,18 @@ public class PartitionRegistryImpl
                         if (closeMeta != null) {
                           topicPartitionMap.get(topic).remove(closeMeta.getPartition());
                         }
+                        if (openMeta.getAddress().equals(NOOP)) {
+                          return CompletableFuture.completedFuture(null);
+                        }
                         return controlNodeCnx.openPartition(openMeta);
                       })
                   .thenCompose(f -> f)
                   .thenAccept(
                       r -> {
+                        if (openMeta.getAddress().equals(NOOP)) {
+                          topicPartitionMap.get(topic).put(openMeta.getPartition(), openMeta);
+                          return;
+                        }
                         if (r == PartitionServiceProto.OpenResponse.Status.SUCCESS) {
                           topicPartitionMap.get(topic).put(openMeta.getPartition(), openMeta);
                         }
