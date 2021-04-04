@@ -31,7 +31,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Constants.*;
@@ -40,6 +39,7 @@ import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMER
 
 class Timer implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(Timer.class);
+  private static final long MAX_SAFE_TIMESTAMP_DIFF = TimeUnit.SECONDS.toMillis(30);
 
   private Partition partition;
   private Queue<TimerIndex> timerIndexQueue = new LinkedBlockingQueue<>();
@@ -61,6 +61,11 @@ class Timer implements Lifecycle {
   private AtomicReference<Status> status = new AtomicReference<>(Status.INIT);
 
   private BlockingQueue<TimerCommit> timerCommitQueue = new LinkedBlockingQueue<>();
+
+  private ExecutorService executorService = Utils.newFixedThreadPool(1, "TimerCatchup");
+  private volatile Cursor expectedCatchupCursor;
+
+  private volatile long lastSafeDiffLogTimestamp = System.currentTimeMillis();
 
   enum Status {
     INIT,
@@ -196,10 +201,6 @@ class Timer implements Lifecycle {
     }
   }
 
-  private ReentrantLock buildIndexLock = new ReentrantLock();
-  private ExecutorService executorService = Utils.newFixedThreadPool(1, "TimerCatchup");
-  private volatile Cursor expectedCatchupCursor;
-
   public void asyncBuildTimerIndex(TimerIndex timerIndex) {
     try {
       if (nextTimerIndexBuildCursor.compareTo(timerIndex.getCursor()) != 0) {
@@ -326,17 +327,14 @@ class Timer implements Lifecycle {
             });
   }
 
-  private static final long MAX_SAFE_TIMESTAMP_DIFF = TimeUnit.SECONDS.toMillis(30);
-  private volatile long lastPrint = System.currentTimeMillis();
-
   private void updateTimestampBarrier(Cursor maxTimerIndexBuildCursor) {
     if (System.currentTimeMillis() - safeTriggerTimestamp > MAX_SAFE_TIMESTAMP_DIFF
-        && System.currentTimeMillis() - lastPrint > 5000) {
+        && System.currentTimeMillis() - lastSafeDiffLogTimestamp > 5000) {
       log.warn(
           "[SAFE_TIMESTAMP_DIFF]safe={},diff={}",
           safeTriggerTimestamp,
           System.currentTimeMillis() - safeTriggerTimestamp);
-      lastPrint = System.currentTimeMillis();
+      lastSafeDiffLogTimestamp = System.currentTimeMillis();
     }
     if (maxTimerIndexBuildCursor.compareTo(timestampBarrierCursor) < 0) {
       return;
@@ -366,6 +364,8 @@ class Timer implements Lifecycle {
       if (indexesBytes.length == 0) {
         continue;
       }
+      byte[] prevCursor = getTimerCursor(slot);
+
       BatchRecord indexesRecord =
           BatchRecord.newBuilder()
               .setFlag(INVISIBLE_FLAG | TIMER_FLAG)
@@ -374,11 +374,17 @@ class Timer implements Lifecycle {
                       .putHeaders(TIMER_TYPE_HEADER, ByteString.copyFrom(TIMER_INDEX_TYPE))
                       .putHeaders(
                           TIMER_SLOT_RECORD_HEADER, ByteString.copyFrom(Utils.getBytes(slot)))
-                      .putHeaders(
-                          TIMER_PRE_CURSOR_HEADER, ByteString.copyFrom(getTimerCursor(slot)))
+                      .putHeaders(TIMER_PRE_CURSOR_HEADER, ByteString.copyFrom(prevCursor))
                       .setValue(ByteString.copyFrom(indexesBytes))
                       .build())
               .build();
+      if (log.isDebugEnabled()) {
+        log.debug(
+            "[TIMER_INDEX_BUILD]{},pre={},indexes={}",
+            partition.name(),
+            Cursor.get(prevCursor),
+            TimerUtils.debugIndexesBytes(indexesBytes));
+      }
 
       futures.add(appendTimerIndex(pipeline, slot, indexesRecord));
     }
@@ -735,12 +741,20 @@ class Timer implements Lifecycle {
       }
       BatchRecord.Builder commit =
           BatchRecord.newBuilder().setFlag(INVISIBLE_FLAG | TIMER_FLAG | META_FLAG);
+      byte[] unmatchedTimerIndexesBytes = TimerUtils.toTimerIndexBytes(unmatchedTimerIndexes);
       commit.addRecords(
           Record.newBuilder()
               .putHeaders(TIMER_TYPE_HEADER, ByteString.copyFrom(TIMER_COMMIT_TYPE))
               .putHeaders(TIMER_TIMESTAMP_HEADER, ByteString.copyFrom(Utils.getBytes(timestamp)))
-              .setValue(ByteString.copyFrom(TimerUtils.toTimerIndexBytes(unmatchedTimerIndexes)))
+              .setValue(ByteString.copyFrom(unmatchedTimerIndexesBytes))
               .build());
+      if (log.isDebugEnabled()) {
+        log.debug(
+            "[TIMER_COMMIT]{},tim={},relink={}",
+            partition.name(),
+            timestamp,
+            TimerUtils.debugIndexesBytes(unmatchedTimerIndexesBytes));
+      }
 
       List<CompletableFuture<Void>> futures = new LinkedList<>();
       if (!linked) {
@@ -763,9 +777,6 @@ class Timer implements Lifecycle {
                     if (rst.getStatus() != Partition.AppendStatus.SUCCESS) {
                       throw new LinkyIOException(
                           String.format("[TIMER_COMMIT_APPEND_FAIL]%s", rst.getStatus()));
-                    }
-                    if (log.isDebugEnabled()) {
-                      log.debug("[TIMER_COMMIT]{},{}", partition.name(), timestamp);
                     }
                   }));
 

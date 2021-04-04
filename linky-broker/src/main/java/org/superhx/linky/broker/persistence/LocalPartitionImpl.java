@@ -333,6 +333,9 @@ public class LocalPartitionImpl implements Partition {
     for (; cursor.compareTo(end) < 0; ) {
       try {
         GetResult rst = get(cursor.toBytes(), false, false).get();
+        if (rst.getStatus() == GetStatus.NO_NEW_MSG || rst.getBatchRecord() == null) {
+            break;
+        }
         stream.onNext(rst.getBatchRecord());
         cursor = Cursor.get(rst.getNextCursor());
       } catch (Exception e) {

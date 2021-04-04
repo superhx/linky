@@ -47,7 +47,7 @@ public class Client {
           BatchRecord.newBuilder()
               .setPartition(0)
               .setVisibleTimestamp(
-                  LocalDateTime.parse("2021-03-01T21:10:30.00").toEpochSecond(ZoneOffset.of("+8"))
+                  LocalDateTime.parse("2021-03-01T21:28:10.00").toEpochSecond(ZoneOffset.of("+8"))
                       * 1000L)
               .addRecords(
                   Record.newBuilder()

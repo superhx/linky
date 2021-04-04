@@ -98,6 +98,20 @@ public class TimerUtils {
     return buf.array();
   }
 
+  public static String debugIndexesBytes(byte[] indexesBytes) {
+    StringBuilder sb = new StringBuilder();
+    ByteBuffer buf = ByteBuffer.wrap(indexesBytes);
+    for (int i = 0; i < indexesBytes.length / TIMER_INDEX_SIZE; i++) {
+      sb.append(buf.getLong())
+          .append(",")
+          .append(buf.getInt())
+          .append(",")
+          .append(buf.getLong())
+          .append(";");
+    }
+    return sb.toString();
+  }
+
   public static int slot(long timestamp) {
     if (timestamp == 0) {
       return -1;
