@@ -26,6 +26,8 @@ public class Constants {
   public static final int META_FLAG = 1 << 1;
   public static final int TIMER_FLAG = 1 << 2;
   public static final int LINK_FLAG = 1 << 4;
+  public static final int TRANS_MSG_FLAG = 1 << 3;
+  public static final int TRANS_CONFIRM_FLAG = 1 << 5;
 
   public static final int NOOP_INDEX = -1;
   public static final long NOOP_OFFSET = -1L;
@@ -63,5 +65,9 @@ public class Constants {
 
   public static final byte[] TIMER_NEXT_TIMESTAMP_KEY = Utils.getBytes(3);
 
+  public static final byte[] TRANS_LSO_KEY = Utils.getBytes(4);
+
+  public static final byte[] TRANS_UNKNOWN_CURSOR_PREFIX = Utils.getBytes(5);
+  public static final byte[] TRANS_ROLLBACK_CURSOR_PREFIX = Utils.getBytes(6);
   /** meta key end */
 }

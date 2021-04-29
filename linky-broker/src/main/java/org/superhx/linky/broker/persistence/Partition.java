@@ -67,7 +67,9 @@ public interface Partition {
 
   class AppendContext {
     public static final String TIMER_INDEX_CTX_KEY = "TIMER_INDEX_CTX_KEY";
-    public static final String TIMERSTAMP_CTX_KEY = "TIMERSTAMP_CTX_KEY";
+    public static final String TIMESTAMP_CTX_KEY = "TIMESTAMP_CTX_KEY";
+    public static final String TRANS_MSG_CTX_KEY = "TRANS_MSG_CTX_KEY";
+    public static final String TRANS_CONFIRM_CTX_KEY = "TRANS_CONFIRM_CTX_KEY";
 
     private Map<String, Object> contexts;
     private Cursor cursor;

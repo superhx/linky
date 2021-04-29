@@ -50,7 +50,8 @@ public class LocalPartitionImpl implements Partition {
   private CompletableFuture<Segment> lastSegmentFuture;
   private Map<Segment, CompletableFuture<Segment>> nextSegmentFutures = new ConcurrentHashMap<>();
   private ReentrantLock appendLock = new ReentrantLock();
-  private Timer timer;
+  private final Timer timer;
+  private final Transaction transaction;
   private ScheduledFuture timerProcessTask;
   private List<AppendHook> appendHooks;
 
@@ -58,6 +59,7 @@ public class LocalPartitionImpl implements Partition {
     this.meta = meta;
     partitionName = meta.getTopicId() + "@" + meta.getPartition();
     timer = new Timer(this);
+    transaction = new Transaction(this);
   }
 
   @Override
@@ -295,6 +297,7 @@ public class LocalPartitionImpl implements Partition {
     long nextOffset = offset + 1;
     nextCursor.putLong(nextOffset);
     int finalSegmentIndex = segmentIndex;
+    long finalOffset = offset;
     return recordFuture.thenCompose(
         r -> {
           if (r == null) {
@@ -318,6 +321,21 @@ public class LocalPartitionImpl implements Partition {
               }
             }
 
+            if (skipInvisible && Flag.isTransMsg(r.getFlag())) {
+              TransactionStatus transactionStatus =
+                  transaction.getTransactionStatus(new Cursor(finalSegmentIndex, finalOffset));
+              switch (transactionStatus) {
+                case Commit:
+                  break;
+                case Unknown:
+                  getResult.setStatus(GetStatus.NO_NEW_MSG);
+                  getResult.setNextCursor(cursor);
+                  return CompletableFuture.completedFuture(getResult);
+                case Rollback:
+                  return get(new Cursor(finalSegmentIndex, nextOffset).toBytes());
+              }
+            }
+
             getResult.setBatchRecord(r);
             getResult.setNextCursor(nextCursor.array());
             return CompletableFuture.completedFuture(getResult);
@@ -334,7 +352,7 @@ public class LocalPartitionImpl implements Partition {
       try {
         GetResult rst = get(cursor.toBytes(), false, false).get();
         if (rst.getStatus() == GetStatus.NO_NEW_MSG || rst.getBatchRecord() == null) {
-            break;
+          break;
         }
         stream.onNext(rst.getBatchRecord());
         cursor = Cursor.get(rst.getNextCursor());
@@ -407,6 +425,7 @@ public class LocalPartitionImpl implements Partition {
         .thenAccept(
             n -> {
               startTimerService();
+              transaction.init();
               this.status.set(PartitionStatus.OPEN);
               log.info("partition {} opened", TextFormat.shortDebugString(meta));
               openFuture.complete(this.status.get());
@@ -431,6 +450,7 @@ public class LocalPartitionImpl implements Partition {
     status.set(PartitionStatus.SHUTTING);
 
     timer.shutdown();
+    transaction.shutdown();
     if (timerProcessTask != null) {
       timerProcessTask.cancel(false);
     }

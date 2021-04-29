@@ -16,21 +16,29 @@
  */
 package org.superhx.linky.broker.persistence;
 
-public class Flag {
+public class Offset implements Comparable<Offset> {
+  private final int index;
+  private final long offset;
 
-  public static boolean isVisible(int flag) {
-    return (flag & Constants.INVISIBLE_FLAG) == 0;
+  public Offset(int index, long offset) {
+    this.index = index;
+    this.offset = offset;
   }
 
-  public static boolean isTimer(int flag) {
-    return (flag & Constants.TIMER_FLAG) != 0;
+  public int getIndex() {
+    return index;
   }
 
-  public static boolean isTransMsg(int flag) {
-    return (flag & Constants.TRANS_MSG_FLAG) != 0;
+  public long getOffset() {
+    return offset;
   }
 
-  public static boolean isTransConfirm(int flag) {
-    return (flag & Constants.TRANS_CONFIRM_FLAG) != 0;
+  public static Offset offset(int index, long offset) {
+    return new Offset(index, offset);
+  }
+
+  @Override
+  public int compareTo(Offset o) {
+    return index == o.index ? Long.compare(offset, o.offset) : Integer.compare(index, o.index);
   }
 }

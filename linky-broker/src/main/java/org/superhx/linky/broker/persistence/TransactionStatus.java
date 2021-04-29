@@ -16,21 +16,8 @@
  */
 package org.superhx.linky.broker.persistence;
 
-public class Flag {
-
-  public static boolean isVisible(int flag) {
-    return (flag & Constants.INVISIBLE_FLAG) == 0;
-  }
-
-  public static boolean isTimer(int flag) {
-    return (flag & Constants.TIMER_FLAG) != 0;
-  }
-
-  public static boolean isTransMsg(int flag) {
-    return (flag & Constants.TRANS_MSG_FLAG) != 0;
-  }
-
-  public static boolean isTransConfirm(int flag) {
-    return (flag & Constants.TRANS_CONFIRM_FLAG) != 0;
-  }
+public enum TransactionStatus {
+  Commit,
+  Rollback,
+  Unknown
 }

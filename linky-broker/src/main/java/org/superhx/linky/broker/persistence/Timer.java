@@ -34,8 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.superhx.linky.broker.persistence.Constants.*;
-import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMERSTAMP_CTX_KEY;
 import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMER_INDEX_CTX_KEY;
+import static org.superhx.linky.broker.persistence.Partition.AppendContext.TIMESTAMP_CTX_KEY;
 
 class Timer implements Lifecycle {
   private static final Logger log = LoggerFactory.getLogger(Timer.class);
@@ -91,7 +91,7 @@ class Timer implements Lifecycle {
         } else {
           batchRecord.setFlag(batchRecord.getFlag() | INVISIBLE_FLAG | TIMER_FLAG);
           timerIndex = TimerUtils.getTimerIndex(batchRecord, false);
-          ctx.putContext(TIMERSTAMP_CTX_KEY, batchRecord.getVisibleTimestamp());
+          ctx.putContext(TIMESTAMP_CTX_KEY, batchRecord.getVisibleTimestamp());
         }
         ctx.putContext(TIMER_INDEX_CTX_KEY, timerIndex);
       }
@@ -102,17 +102,18 @@ class Timer implements Lifecycle {
         Cursor cursor = ctx.getCursor();
         timerIndex.setCursor(cursor.getIndex(), cursor.getOffset());
         timerIndex.setNext(ctx.getNextCursor());
-        Long timestamp = ctx.getContext(TIMERSTAMP_CTX_KEY);
+        Long timestamp = ctx.getContext(TIMESTAMP_CTX_KEY);
         if (timestamp != null) {
           timerIndex.setIndexes(
               TimerUtils.getTimerIndexBytes(
-                  ctx.getContext(TIMERSTAMP_CTX_KEY), cursor.getIndex(), cursor.getOffset()));
+                  ctx.getContext(TIMESTAMP_CTX_KEY), cursor.getIndex(), cursor.getOffset()));
         }
         asyncBuildTimerIndex(timerIndex);
       }
     };
   }
 
+  @Override
   public void init() {
     byte[] lsoBytes = partition.getMeta(TIMER_LSO_KEY);
     if (lsoBytes == null) {
@@ -153,6 +154,8 @@ class Timer implements Lifecycle {
   }
 
   private CompletableFuture<Void> flushMeta() {
+    byte[] timerLSOBytes = getTimerLSO().toBytes();
+    byte[] timerNextTimestampBytes = Utils.getBytes(timerNextTimestamp);
     return CompletableFuture.allOf(
             cursorSegments.values().stream()
                 .map(s -> s.flushMeta())
@@ -162,9 +165,9 @@ class Timer implements Lifecycle {
             nil ->
                 partition.setMeta(
                     Constants.TIMER_LSO_KEY,
-                    getTimerLSO().toBytes(),
+                    timerLSOBytes,
                     Constants.TIMER_NEXT_TIMESTAMP_KEY,
-                    Utils.getBytes(timerNextTimestamp)));
+                    timerNextTimestampBytes));
   }
 
   private Cursor getTimerLSO() {
